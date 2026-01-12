@@ -13,6 +13,7 @@ type Pcontext struct{
 	RoundTripper RoundTripper
 	Error error
 	Session int64
+	TrafficCounter *TrafficCounter // 全局流量计数器，记录整个请求-响应周期的流量
 }
 
 /*

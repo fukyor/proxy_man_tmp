@@ -42,7 +42,7 @@ func (proxy *CoreHttpServer) HookOnReq(conds ...ReqCondition) *ReqProxyConds {
 	return &ReqProxyConds{proxy, conds}
 }
 
-func (proxy *CoreHttpServer) OnResponse(respConds ...RespCondition) *RespProxyConds {
+func (proxy *CoreHttpServer) HookOnResp(respConds ...RespCondition) *RespProxyConds {
 	return &RespProxyConds{proxy, nil, respConds}
 }
 
@@ -103,6 +103,8 @@ type RespProxyConds struct {
 	reqConds  []ReqCondition  // 请求条件（用 ReqCondition的HandleReq 检查）
 	respConds []RespCondition // 响应条件（用 HandleResp 检查）
 }
+
+
 
 /********************条件过滤闭包函数***********************/
 func UrlHook(urls ...string) ReqConditionFunc {

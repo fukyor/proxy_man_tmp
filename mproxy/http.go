@@ -14,8 +14,10 @@ func (proxy *CoreHttpServer) MyHttpHandler(w http.ResponseWriter, r *http.Reques
 	ctxt := &Pcontext{
 		core_proxy: proxy,
 		Req: r,
+		TrafficCounter: &TrafficCounter{},
 		Session: atomic.AddInt64(&proxy.sess, 1),
 	}
+	
 	if !r.URL.IsAbs(){
 		proxy.DirectHandler.ServeHTTP(w, r)
 		return	
@@ -54,7 +56,7 @@ func (proxy *CoreHttpServer) MyHttpHandler(w http.ResponseWriter, r *http.Reques
 		}
 		return  // hanler函数结束后，go会自动释放连接
 	}
-	ctxt.Log_P("Copying response to client %v [%d]", resp.Status, resp.StatusCode)
+	//ctxt.Log_P("Copying response to client %v [%d]", resp.Status, resp.StatusCode)
 
 	//不用担心Content-Length被删除的问题，会自动降级为chunked模式，
 	if oriBody != resp.Body {
@@ -74,14 +76,14 @@ func (proxy *CoreHttpServer) MyHttpHandler(w http.ResponseWriter, r *http.Reques
 		bodyWriter = &flushWriter{w: w}
 	}
 
-	nr, err := io.Copy(bodyWriter, resp.Body)
+	_, err = io.Copy(bodyWriter, resp.Body)
 
 	// resp.Body.Close()可能关闭新打开的内存或文件
 	// oriBody.Close()关闭原始socket，由body中的Close字段避免重复关闭socket报错。
 	if err := resp.Body.Close(); err != nil {  
 		ctxt.WarnP("Can't close response body %v", err)
 	}
-	ctxt.Log_P("Copied %v bytes to client error=%v", nr, err)
+	//ctxt.Log_P("Copied %v bytes to client error=%v", nr, err)
 
 
 }
