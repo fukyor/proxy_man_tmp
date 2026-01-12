@@ -1,0 +1,14 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(go mod tidy:*)",
+      "Bash(go build:*)",
+      "Bash(go env:*)",
+      "Bash(set GO111MODULE=on:*)"
+    ],
+    "deny": [
+      "Read(/test1.go)"
+    ],
+    "ask": []
+  }
+}
