@@ -4,6 +4,8 @@ import (
 	"crypto/tls"
 )
 
-var tlsIgnoreVerify = &tls.Config{
+var Proxy_ManCa tls.Certificate
+
+var defaultTLSConfig = &tls.Config{
 	InsecureSkipVerify: true,
 }

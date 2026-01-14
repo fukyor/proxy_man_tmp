@@ -6,6 +6,8 @@ import (
 	"net/http"
 	"os"
 	"io"
+	"regexp"
+	"net"
 )
 
 /*
@@ -18,6 +20,11 @@ type CoreHttpServer struct{
 	DirectHandler http.Handler
 	reqHandlers []ReqHandler    // 封装请求过滤器
 	respHandlers []RespHandler	// 封装响应过滤器
+	httpsHandlers []HttpsHandler
+	ConnectMutiDial        func(network string, addr string) (net.Conn, error) // 多级代理
+	ConnectWithReqDial func(req *http.Request, network string, addr string) (net.Conn, error) // 分流规则
+	
+	ConnectionErrHandler func(conn io.Writer, ctx *Pcontext, err error)
 
 	Logger Logger
 	Verbose bool
@@ -28,6 +35,7 @@ type CoreHttpServer struct{
 	KeepAcceptEncoding bool
 }
 
+var Port = regexp.MustCompile(`:\d+$`)
 
 type flushWriter struct {
 	w io.Writer
@@ -99,9 +107,10 @@ func (proxy *CoreHttpServer) filterResponse(respOrig *http.Response, ctx *Pconte
 func (proxy *CoreHttpServer) ServeHTTP(w http.ResponseWriter, r *http.Request){
 	if r.Method == http.MethodConnect{
 		//调用https处理器
+		proxy.MyHttpsHandle(w, r)
 	}else{
-		//调用http处理器
-		proxy.MyHttpHandler(w, r)
+		//调用http处理器, 
+		proxy.MyHttpHandle(w, r)
 		
 	}
 }
@@ -111,7 +120,7 @@ func NewCoreHttpSever() *CoreHttpServer{
 	core_proxy := &CoreHttpServer{
 		Logger: log.New(os.Stderr, "", log.LstdFlags),
 		transport: &http.Transport{
-			TLSClientConfig: tlsIgnoreVerify,
+			//TLSClientConfig: tlsIgnoreVerify,
 			Proxy: http.ProxyFromEnvironment, //从环境变量读取http_proxy作为代理，而不使用硬编码
 		},
 	}

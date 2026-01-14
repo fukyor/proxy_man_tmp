@@ -1,18 +1,31 @@
 package main
 
 import (
-	//"encoding/base64"
 	"flag"
 	"log"
 	"net/http"
-    "proxy_man/mproxy"
+	"proxy_man/mproxy"
+	// "net/http/httputil"
+	// "fmt"
 )
 
-func main(){
-    verbose := flag.Bool("v", false, "should every proxy request be logged to stdout")
+func main() {
+	verbose := flag.Bool("v", true, "should every proxy request be logged to stdout")
 	addr := flag.String("addr", ":8080", "proxy listen address")
 	flag.Parse()
-    proxy := mproxy.NewCoreHttpSever()
-    proxy.Verbose = *verbose
-    log.Fatal(http.ListenAndServe(*addr, proxy))
+	proxy := mproxy.NewCoreHttpSever()
+	proxy.Verbose = *verbose
+
+	mproxy.PrintReqHeader(proxy)
+	mproxy.PrintRespHeader(proxy)
+	mproxy.AddTrafficMonitor(proxy)
+
+	s := http.Server{
+		Addr: *addr,
+		Handler: proxy,
+	}
+	if err := s.ListenAndServe(); err != nil{
+		log.Fatal("服务器错误", err)
+	}
+	
 }

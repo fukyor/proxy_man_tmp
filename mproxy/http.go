@@ -7,7 +7,7 @@ import(
 	"strings"
 )
 
-func (proxy *CoreHttpServer) MyHttpHandler(w http.ResponseWriter, r *http.Request){
+func (proxy *CoreHttpServer) MyHttpHandle(w http.ResponseWriter, r *http.Request){
 	var err error 
 	var oriBody io.ReadCloser
 
