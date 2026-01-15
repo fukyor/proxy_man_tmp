@@ -2,6 +2,7 @@ package mproxy
 
 import (
 	"bufio"
+	"context"
 	"crypto/tls"
 	"errors"
 	"fmt"
@@ -12,7 +13,6 @@ import (
 	"proxy_man/signer"
 	"strings"
 	"sync"
-	"context"
 	"sync/atomic"
 )
 
@@ -28,7 +28,7 @@ const (
 )
 
 var (
-	OkConnect = &ConnectAction{Action: ConnectAccept, TLSConfig: TLSConfigFromCA(&Proxy_ManCa)}
+	OkConnect       = &ConnectAction{Action: ConnectAccept, TLSConfig: TLSConfigFromCA(&Proxy_ManCa)}
 	HTTPMitmConnect = &ConnectAction{Action: ConnectHTTPMitm, TLSConfig: TLSConfigFromCA(&Proxy_ManCa)}
 )
 
@@ -46,7 +46,6 @@ type halfClosable interface {
 }
 
 var _ halfClosable = (*net.TCPConn)(nil)
-
 
 func stripPort(s string) string {
 	var ix int
@@ -169,17 +168,16 @@ func copyOrWarn(ctx *Pcontext, dst io.Writer, src io.Reader) error {
 	return err
 }
 
-
-func (proxy *CoreHttpServer) MyHttpsHandle(w http.ResponseWriter, r *http.Request){
-		ctxt := &Pcontext{
-		core_proxy: proxy,
-		Req: r,
+func (proxy *CoreHttpServer) MyHttpsHandle(w http.ResponseWriter, r *http.Request) {
+	ctxt := &Pcontext{
+		core_proxy:     proxy,
+		Req:            r,
 		TrafficCounter: &TrafficCounter{},
-		Session: atomic.AddInt64(&proxy.sess, 1),
+		Session:        atomic.AddInt64(&proxy.sess, 1),
 	}
-	
+
 	// 创建hijack
-	hijk, ok := w.(http.Hijacker) 
+	hijk, ok := w.(http.Hijacker)
 	if !ok {
 		panic("httpsSever not support hijack")
 	}
@@ -188,18 +186,18 @@ func (proxy *CoreHttpServer) MyHttpsHandle(w http.ResponseWriter, r *http.Reques
 
 	if err != nil {
 		panic("hijack connection fail" + err.Error())
-    }
+	}
 	ctxt.Log_P("处理器数量Have %d CONNECT handlers", len(proxy.httpsHandlers))
 
 	strategy, host := OkConnect, r.URL.Host
 
-	// 
+	//
 	for i, h := range proxy.httpsHandlers {
 		new_strategy, newhost := h.HandleConnect(host, ctxt)
 		// 和resphook一样返回nil说明没有匹配上条件，如果不等于nil则匹配上了就替换新的策略
 		if new_strategy != nil {
 			strategy, host = new_strategy, newhost
-			ctxt.Log_P("Excuted %dth handler: %v %s",i, strategy, host)
+			ctxt.Log_P("Excuted %dth handler: %v %s", i, strategy, host)
 			break
 		}
 	}
@@ -218,7 +216,7 @@ func (proxy *CoreHttpServer) MyHttpsHandle(w http.ResponseWriter, r *http.Reques
 		ctxt.Log_P("Accepting CONNECT to %s", host)
 
 		_, err = connFromClinet.Write([]byte("HTTP/1.0 200 Connection established\r\n\r\n"))
-		if err != nil{
+		if err != nil {
 			ctxt.WarnP("200 Connection fail established")
 			return
 		}
@@ -230,7 +228,7 @@ func (proxy *CoreHttpServer) MyHttpsHandle(w http.ResponseWriter, r *http.Reques
 				var wg sync.WaitGroup
 				wg.Add(2)
 				// 向remote写完所有数据后，proxy关闭写发出FIN，remote收到FIN，完成读取后，调用close回复FIN，完成挥手
-				go copyAndClose(ctxt, targetTCP, proxyClientTCP, &wg) 
+				go copyAndClose(ctxt, targetTCP, proxyClientTCP, &wg)
 				// 向client写完所有数据后，proxy关闭写发出FIN，client收到FIN，完成读取后，调用close回复FIN，完成挥手
 				go copyAndClose(ctxt, proxyClientTCP, targetTCP, &wg)
 				wg.Wait()
@@ -238,7 +236,7 @@ func (proxy *CoreHttpServer) MyHttpsHandle(w http.ResponseWriter, r *http.Reques
 				proxyClientTCP.Close()
 				targetTCP.Close()
 			}()
-		}else{
+		} else {
 			go func() {
 				err := copyOrWarn(ctxt, connRemoteSite, connFromClinet)
 				if err != nil && proxy.ConnectionErrHandler != nil {
@@ -253,7 +251,7 @@ func (proxy *CoreHttpServer) MyHttpsHandle(w http.ResponseWriter, r *http.Reques
 				_ = connFromClinet.Close()
 			}()
 		}
-	// 调用用户自己的劫持逻辑，暂时没想到怎么使用	
+	// 调用用户自己的劫持逻辑，暂时没想到怎么使用
 	// case ConnectHijack:
 	// 	strategy.Hijack(r, connFromClinet, ctxt)
 	// http隧道透传，有利于server和client的HTTP1.1连接复用。减轻proxy压力。
@@ -266,10 +264,10 @@ func (proxy *CoreHttpServer) MyHttpsHandle(w http.ResponseWriter, r *http.Reques
 
 		// 构建自定义RquestReader
 		reqM := http1parser.NewRequestReader(proxy.PreventParseHeader, connFromClinet)
-		
+
 		// 模拟阻塞read，连续维持隧道，只要client不发送FIN，就保持
 		for !reqM.IsEOF() {
-			// 从client个性化提取请求头部
+			// 从client提取请求头部
 			req, err := reqM.ReadRequest()
 			if err != nil && !errors.Is(err, io.EOF) {
 				ctxt.WarnP("http协议解析错误http parser errror: %+#v", err)
@@ -288,33 +286,32 @@ func (proxy *CoreHttpServer) MyHttpsHandle(w http.ResponseWriter, r *http.Reques
 				ctxt.Req = req
 
 				req, resp := proxy.filterRequest(req, ctxt)
-				if resp != nil {
+				if resp == nil {
 					if connRemoteSite == nil {
 						// 和target建立tcp连接
 						connRemoteSite, err = proxy.connectDial(ctxt, "tcp", host)
 						if err != nil {
-							ctxt.WarnP("MITM Error dialing to %s: %s", host, err.Error())
+							ctxt.WarnP("http远程拨号失败Http MITM Error dialing to %s: %s", host, err.Error())
 							return false
 						}
+						// 封装好reader准备读取target响应
 						remote_res = bufio.NewReader(connRemoteSite)
 					}
+					// 向target发起请求
+					if err := req.Write(connRemoteSite); err != nil {
+						httpError(connFromClinet, ctxt, err)
+						return false
+					}
+					// 根据req类型，接受响应
+					resp, err = func() (*http.Response, error) {
+						defer req.Body.Close()
+						return http.ReadResponse(remote_res, req)
+					}()
+					if err != nil {
+						httpError(connFromClinet, ctxt, err)
+						return false
+					}
 				}
-
-				// 向target发起请求
-				if err := req.Write(connRemoteSite); err != nil {
-					httpError(connFromClinet, ctxt, err)
-					return false
-				}
-				// 根据req类型，接受响应
-				resp, err = func() (*http.Response, error) {
-					defer req.Body.Close()
-					return http.ReadResponse(remote_res, req)
-				}()
-				if err != nil {
-					httpError(connFromClinet, ctxt, err)
-					return false
-				}
-
 				// 响应处理
 				resp = proxy.filterResponse(resp, ctxt)
 				defer resp.Body.Close()
@@ -325,9 +322,7 @@ func (proxy *CoreHttpServer) MyHttpsHandle(w http.ResponseWriter, r *http.Reques
 					httpError(connFromClinet, ctxt, err)
 					return false
 				}
-
 				return true
-
 			}
 			if !requestOk(req) {
 				break

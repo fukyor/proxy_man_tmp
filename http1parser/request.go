@@ -54,7 +54,8 @@ func (r *RequestReader) ReadRequest() (*http.Request, error) {
 		return http.ReadRequest(r.reader)
 	}
 
-	// 先用标准库将头部解析为request结构体
+	// 先把socket数据读到缓冲区并解析。Buffered记录剩余缓冲区未解析字节数
+	// 并用标准库头部解析为request结构体。
 	req, err := http.ReadRequest(r.reader)
 	if err != nil {
 		return nil, err
@@ -84,12 +85,8 @@ func (r *RequestReader) ReadRequest() (*http.Request, error) {
 }
 
 func getRequestReader(r *bufio.Reader, cloned *bytes.Buffer) *textproto.Reader {
-	// "Cloned" buffer uses the raw connection as the data source.
-	// However, the *bufio.Reader can read also bytes of another unrelated
-	// request on the same connection, since it's buffered, so we have to
-	// ignore them before passing the data to our headers parser.
-	// Data related to the next request will remain inside the buffer for
-	// later usage.
+
+
 	data := cloned.Next(cloned.Len() - r.Buffered())
 	return &textproto.Reader{
 		R: bufio.NewReader(bytes.NewReader(data)),
