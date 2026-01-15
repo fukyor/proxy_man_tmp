@@ -19,6 +19,7 @@ func main() {
 	mproxy.PrintReqHeader(proxy)
 	mproxy.PrintRespHeader(proxy)
 	mproxy.AddTrafficMonitor(proxy)
+	mproxy.StatusChange(proxy)
 
 	s := http.Server{
 		Addr: *addr,

@@ -71,7 +71,6 @@ func (proxy *CoreHttpServer) MyHttpHandle(w http.ResponseWriter, r *http.Request
 	// 处理sse和chunker连接。sse每个事件需要立即发送，不能缓冲。chunker数据分块发送，每块立即传输不能缓冲。
 	if strings.HasPrefix(w.Header().Get("content-type"), "text/event-stream") ||
 		strings.Contains(w.Header().Get("transfer-encoding"), "chunked") {
-		// server-side events, flush the buffered data to the client.
 		
 		bodyWriter = &flushWriter{w: w}
 	}

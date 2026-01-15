@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"net/http"
 	"net/http/httputil"
+	"strings"
 )
 
 // 流量计数器
@@ -88,3 +89,29 @@ func PrintRespHeader(proxy *CoreHttpServer) {
 		return resp
 	})
 }
+
+var httpDomains = map[string]bool{
+    "example.com": true,
+}
+func StatusChange(proxy *CoreHttpServer) {
+	proxy.HookOnReq().DoConnectFunc(func(host string, ctx *Pcontext) (*ConnectAction, string) {
+		hostname := host
+		if colonIdx := strings.LastIndex(host, ":"); colonIdx != -1 {
+			hostname = host[:colonIdx]
+		}
+		
+		// 1. 域名白名单判断
+		if httpDomains[hostname] {
+			return HTTPMitmConnect, host
+		}
+		
+		// 2. 端口判断
+		if strings.HasSuffix(host, ":80") {
+			return HTTPMitmConnect, host
+		}
+		
+		// 3. 默认情况
+		return OkConnect, host
+	})
+}
+

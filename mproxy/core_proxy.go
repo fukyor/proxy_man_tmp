@@ -31,6 +31,7 @@ type CoreHttpServer struct{
 	KeepHeader bool 
 	sess	int64 // 全局日志ID，每来一个请求都加1
 
+	PreventParseHeader bool
 	KeepCurHeaders bool
 	KeepAcceptEncoding bool
 }

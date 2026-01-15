@@ -26,16 +26,14 @@ func (f FuncRespHandler) Handle(resp *http.Response, ctx *Pcontext) *http.Respon
 	return f(resp, ctx)
 }
 
-
-
+/**************************连接选择器***********************************/
+//HandleConnect 主要就是做一个简单的策略决策，返回预定义的连接动作即可，不需要像 Handle 那样处理复杂的请求/响应内容。
 type HttpsHandler interface {
 	HandleConnect(req string, ctx *Pcontext) (*ConnectAction, string)
 }
 
-// A wrapper that would convert a function to a HttpsHandler interface type.
 type FuncHttpsHandler func(host string, ctx *Pcontext) (*ConnectAction, string)
 
-// FuncHttpsHandler should implement the RespHandler interface.
 func (f FuncHttpsHandler) HandleConnect(host string, ctx *Pcontext) (*ConnectAction, string) {
 	return f(host, ctx)
 }
