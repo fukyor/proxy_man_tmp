@@ -261,8 +261,15 @@ func (proxy *CoreHttpServer) MyHttpsHandle(w http.ResponseWriter, r *http.Reques
 
 		var connRemoteSite net.Conn
 		var remote_res *bufio.Reader
-
-		// 构建自定义RquestReader
+		// 很关键，不要依赖自动关闭，一定要手动关闭
+		defer func() {
+			if connRemoteSite != nil {
+				_ = connRemoteSite.Close()
+			}
+			_ = connFromClinet.Close()
+		}()
+		
+		// 构建带clone的RquestReader
 		reqM := http1parser.NewRequestReader(proxy.PreventParseHeader, connFromClinet)
 
 		// 模拟阻塞read，连续维持隧道，只要client不发送FIN，就保持
@@ -314,7 +321,7 @@ func (proxy *CoreHttpServer) MyHttpsHandle(w http.ResponseWriter, r *http.Reques
 				}
 				// 响应处理
 				resp = proxy.filterResponse(resp, ctxt)
-				defer resp.Body.Close()
+				defer resp.Body.Close() // 只是把当前连接标记为空闲，连接依然在resp.Body中存在。
 
 				// 将resp的响应头和body完整发送给客户端
 				err = resp.Write(connFromClinet)
@@ -327,6 +334,6 @@ func (proxy *CoreHttpServer) MyHttpsHandle(w http.ResponseWriter, r *http.Reques
 			if !requestOk(req) {
 				break
 			}
-		}
+		} 
 	}
 }

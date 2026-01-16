@@ -50,7 +50,8 @@ func AddTrafficMonitor(proxy *CoreHttpServer) {
 		resp.Body = &TrafficCounter{
 			ReadCloser: resp.Body,
 			onClose: func(bodyBytes int64) {
-				ctx.TrafficCounter.resp_sum = bodyBytes
+				ctx.TrafficCounter.resp_body = bodyBytes
+				ctx.TrafficCounter.UpdateRespSum()
 				ctx.TrafficCounter.UpdateTotal()
 				ctx.Log_P("[流量统计] 上行: %d (header:%d body:%d) | 下行: %d (header:%d body:%d) | 总计: %d | %s | %s | %s",
 					ctx.TrafficCounter.req_sum, ctx.TrafficCounter.req_header, ctx.TrafficCounter.req_body,
