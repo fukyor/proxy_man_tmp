@@ -304,6 +304,10 @@ func (proxy *CoreHttpServer) MyHttpsHandle(w http.ResponseWriter, r *http.Reques
 							ctxt.WarnP("http远程拨号失败Http MITM Error dialing to %s: %s", host, err.Error())
 							return false
 						}
+						    // 打印目标IP地址
+						if remoteAddr := connRemoteSite.RemoteAddr(); remoteAddr != nil {
+							ctxt.Log_P("目标ip: %s (host: %s)", remoteAddr.String(), host)
+						}
 						// 封装好reader准备读取target响应
 						remote_res = bufio.NewReader(connRemoteSite)
 					}
@@ -383,7 +387,7 @@ func (proxy *CoreHttpServer) MyHttpsHandle(w http.ResponseWriter, r *http.Reques
 				}
 				
 				req.RemoteAddr = r.RemoteAddr
-				ctxt.Log_P("client Host %v", r.Host)
+				ctxt.Log_P("client ip: %v, request Host %v",r.RemoteAddr, r.Host)
 
 				if !strings.HasPrefix(req.URL.String(), "https://") {
 					req.URL, err = url.Parse("https://" + r.Host + req.URL.String())

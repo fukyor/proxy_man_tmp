@@ -34,7 +34,7 @@ func (ctx *Pcontext) RoundTrip(req *http.Request) (*http.Response, error) {
 		return ctx.RoundTripper.RoundTrip(req, ctx)
 	}
 	// 如果没有自定义发送函数，则使用transport的
-	return ctx.core_proxy.transport.RoundTrip(req) 
+	return ctx.core_proxy.Transport.RoundTrip(req) 
 }
 
 type CertStorage interface {

@@ -5,6 +5,7 @@ import (
 	"log"
 	"net/http"
 	"proxy_man/mproxy"
+	"net/http/httptrace"
 	// "net/http/httputil"
 	// "fmt"
 )
@@ -22,6 +23,24 @@ func main() {
 	mproxy.AddTrafficMonitor(proxy)
 	//mproxy.StatusChange(proxy)
 	mproxy.MitmMode(proxy)
+
+	// 注册一个请求钩子来注入 httptrace
+    proxy.HookOnReq().DoFunc(func(req *http.Request, ctx *mproxy.Pcontext) (*http.Request, *http.Response) {
+        // 定义 Trace 钩子
+        trace := &httptrace.ClientTrace{
+            // 当成功获取到连接时（无论是新建还是复用）调用
+            GotConn: func(connInfo httptrace.GotConnInfo) {
+                remoteAddr := connInfo.Conn.RemoteAddr()
+                if connInfo.Reused {
+                    ctx.Log_P("[RoundTrip] 复用连接 IP: %s", remoteAddr)
+                } else {
+                    ctx.Log_P("[RoundTrip] 新建连接 IP: %s", remoteAddr)
+                }
+            },
+        }
+        ctxTrace := httptrace.WithClientTrace(req.Context(), trace)
+        return req.WithContext(ctxTrace), nil
+    })
 
 	s := http.Server{
 		Addr: *addr,
