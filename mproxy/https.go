@@ -366,7 +366,7 @@ func (proxy *CoreHttpServer) MyHttpsHandle(w http.ResponseWriter, r *http.Reques
 			}
 			reqTlsReader := http1parser.NewRequestReader(proxy.PreventParseHeader, tlsConn)
 
-			// 死循环维持隧道，理论上用for即可，这里是防御性编程
+			// for维持隧道，循环读取client
 			for !reqTlsReader.IsEOF() {
 				// 获得格式化或非格式化请求头(由PreventParseHeader决定)
 				req, err := reqTlsReader.ReadRequest()
@@ -394,7 +394,6 @@ func (proxy *CoreHttpServer) MyHttpsHandle(w http.ResponseWriter, r *http.Reques
 				}
 
 				if continueLoop := func(req *http.Request) bool {
-
 					requestContext, finishRequest := context.WithCancel(req.Context())
 					req = req.WithContext(requestContext)
 					defer finishRequest()
@@ -458,6 +457,7 @@ func (proxy *CoreHttpServer) MyHttpsHandle(w http.ResponseWriter, r *http.Reques
 						resp.Header.Set("Transfer-Encoding", "chunked")
 					}
 					// Force connection close otherwise chrome will keep CONNECT tunnel open forever
+					// 非websocket强制静止连接复用，向client发送connection: close
 					if !isWebsocket {
 						resp.Header.Set("Connection", "close")
 					}
@@ -516,19 +516,18 @@ func (proxy *CoreHttpServer) MyHttpsHandle(w http.ResponseWriter, r *http.Reques
 								ctxt.WarnP("Cannot write TLS response body from mitm'd client: %v", err)
 								return false
 							}
-							if err := tlsConn.Close(); err != nil {
-								ctxt.WarnP("Cannot write TLS EOF from mitm'd client: %v", err)
-								return false
-							}
-							// 优化，执行到这里肯定已经是client或server决定关闭隧道，我们就不需要再循环了
-							return false
 						}
 					}
+					// 如果是client和proxy正常断开连接则返回true，而不是直接返回false后直接执行return逻辑
+					// 原因是为了循环上去接受client的FIN优雅退出，直接退出虽然可行但是不符合client收到
+					// connection: close后的逻辑主动发出FIN的逻辑
 					return true
 				}(req); !continueLoop {
+					// 异常退出，错误已打印
 					return
 				}
 			}
+			// 正常退出，收到client EOF
 			ctxt.Log_P("Exiting on EOF")
 		}()
 	}
