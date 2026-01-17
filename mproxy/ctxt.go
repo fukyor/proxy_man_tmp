@@ -12,6 +12,7 @@ type Pcontext struct{
 	Req *http.Request
 	Resp *http.Response
 	RoundTripper RoundTripper
+	UserData any
 
 	certStore CertStorage
 	Error error

@@ -9,9 +9,11 @@ import (
 	"io"
 	"net"
 	"net/http"
+	"net/url"
 	"proxy_man/http1parser"
 	"proxy_man/signer"
 	"strings"
+	"strconv"
 	"sync"
 	"sync/atomic"
 )
@@ -30,6 +32,7 @@ const (
 var (
 	OkConnect       = &ConnectAction{Action: ConnectAccept, TLSConfig: TLSConfigFromCA(&Proxy_ManCa)}
 	HTTPMitmConnect = &ConnectAction{Action: ConnectHTTPMitm, TLSConfig: TLSConfigFromCA(&Proxy_ManCa)}
+	MitmConnect     = &ConnectAction{Action: ConnectMitm, TLSConfig: TLSConfigFromCA(&Proxy_ManCa)}
 )
 
 type ConnectAction struct {
@@ -268,14 +271,14 @@ func (proxy *CoreHttpServer) MyHttpsHandle(w http.ResponseWriter, r *http.Reques
 			}
 			_ = connFromClinet.Close()
 		}()
-		
+
 		// 构建带clone的RquestReader
-		reqM := http1parser.NewRequestReader(proxy.PreventParseHeader, connFromClinet)
+		reqReader := http1parser.NewRequestReader(proxy.PreventParseHeader, connFromClinet)
 
 		// 模拟阻塞read，连续维持隧道，只要client不发送FIN，就保持
-		for !reqM.IsEOF() {
+		for !reqReader.IsEOF() {
 			// 从client提取请求头部
-			req, err := reqM.ReadRequest()
+			req, err := reqReader.ReadRequest()
 			if err != nil && !errors.Is(err, io.EOF) {
 				ctxt.WarnP("http协议解析错误http parser errror: %+#v", err)
 			}
@@ -334,6 +337,191 @@ func (proxy *CoreHttpServer) MyHttpsHandle(w http.ResponseWriter, r *http.Reques
 			if !requestOk(req) {
 				break
 			}
-		} 
+		}
+	case ConnectMitm:
+		_, _ = connFromClinet.Write([]byte("HTTP/1.0 200 OK\r\n\r\n"))
+		ctxt.Log_P("tls中间人劫持, TLS Mitm")
+		tlsConfig := defaultTLSConfig
+		// 根据生成自签名伪装host证书
+		if strategy.TLSConfig != nil {
+			var err error
+			tlsConfig, err = strategy.TLSConfig(host, ctxt)
+			if err != nil {
+				httpError(connFromClinet, ctxt, err)
+				return
+			}
+		}
+		go func() {
+			// TODO: cache connections to the remote website		
+			tlsConn := tls.Server(connFromClinet, tlsConfig)
+			defer tlsConn.Close()
+			// 完成和client的握手
+			if err := tlsConn.Handshake(); err != nil {
+				ctxt.WarnP("tls握手失败Cannot handshake client %v %v", r.Host, err)
+				return
+			}
+			reqTlsReader := http1parser.NewRequestReader(proxy.PreventParseHeader, tlsConn)
+
+			for !reqTlsReader.IsEOF() {
+				// 获得格式化或非格式化请求头(由PreventParseHeader决定)
+				req, err := reqTlsReader.ReadRequest()
+
+				ctxt := &Pcontext{
+					Req:          req,
+					Session:      atomic.AddInt64(&proxy.sess, 1),
+					core_proxy:   proxy,
+					UserData:     ctxt.UserData, //如果用户在 HandleConnect 处理器中设置了 UserData 或 RoundTripper，则继承保留
+					RoundTripper: ctxt.RoundTripper,
+				}
+				if err != nil && !errors.Is(err, io.EOF) {
+					ctxt.WarnP("TlsConn解析http请求失败Cannot read TLS request client %v %v", r.Host, err)
+				}
+				if err != nil {
+					return
+				}
+				
+				req.RemoteAddr = r.RemoteAddr
+				ctxt.Log_P("client Host %v", r.Host)
+
+				if !strings.HasPrefix(req.URL.String(), "https://") {
+					req.URL, err = url.Parse("https://" + r.Host + req.URL.String())
+				}
+
+				if continueLoop := func(req *http.Request) bool {
+
+					requestContext, finishRequest := context.WithCancel(req.Context())
+					req = req.WithContext(requestContext)
+					defer finishRequest()
+
+					ctxt.Req = req
+
+					// https已经解析成功，我们可以查看请求
+					req, resp := proxy.filterRequest(req, ctxt)
+					if resp == nil {
+						if err != nil {
+							if req.URL != nil {
+								ctxt.WarnP("Illegal URL %s", "https://"+r.Host+req.URL.Path)
+							} else {
+								ctxt.WarnP("Illegal URL %s", "https://"+r.Host)
+							}
+							return false
+						}
+						if !proxy.KeepHeader {
+							RemoveProxyHeaders(ctxt, req)
+						}
+						resp, err = func() (*http.Response, error) {
+							// 关闭req的读取器很重要，因为req上传文件时，是需要从body中流式读取的，并不是都从map中读取。关闭后避免roundtrip数据竞争
+							defer req.Body.Close()
+							// 向target发送请求，tr自动处理https。tr之前在proxy中已配置
+							return ctxt.RoundTrip(req)
+						}()
+						if err != nil {
+							ctxt.WarnP("Cannot read TLS response from mitm'd server %v", err)
+							return false
+						}
+						ctxt.Log_P("resp %v", resp.Status)
+					}
+					origBody := resp.Body
+					// 可明文处理响应
+					resp = proxy.filterResponse(resp, ctxt)
+					bodyModified := resp.Body != origBody
+					defer resp.Body.Close()
+
+					// 写入响应状态行
+					text := resp.Status
+					statusCode := strconv.Itoa(resp.StatusCode) + " "
+					text = strings.TrimPrefix(text, statusCode)
+					// 使用tlsConn可以自动加密写入
+					if _, err := io.WriteString(tlsConn, "HTTP/1.1"+" "+statusCode+text+"\r\n"); err != nil {
+						ctxt.WarnP("响应数据加密失败Cannot write TLS response HTTP status from mitm'd client: %v", err)
+						return false
+					}
+
+					// 加密写入响应头
+					isWebsocket := isWebSocketHandshake(resp.Header)
+					if isWebsocket || resp.Request.Method == http.MethodHead {
+						// don't change Content-Length for HEAD request
+					} else if (resp.StatusCode >= 100 && resp.StatusCode < 200) ||
+						resp.StatusCode == http.StatusNoContent {
+						// RFC7230: A server MUST NOT send a Content-Length header field in any response
+						// with a status code of 1xx (Informational) or 204 (No Content)
+						resp.Header.Del("Content-Length")
+					} else if bodyModified {
+						// Since we don't know the length of resp, return chunked encoded response
+						resp.Header.Del("Content-Length")
+						resp.Header.Set("Transfer-Encoding", "chunked")
+					}
+					// Force connection close otherwise chrome will keep CONNECT tunnel open forever
+					if !isWebsocket {
+						resp.Header.Set("Connection", "close")
+					}
+					if err := resp.Header.Write(tlsConn); err != nil {
+						ctxt.WarnP("Cannot write TLS response header from mitm'd client: %v", err)
+						return false
+					}
+					if _, err = io.WriteString(tlsConn, "\r\n"); err != nil {
+						ctxt.WarnP("Cannot write TLS response header end from mitm'd client: %v", err)
+						return false
+					}
+
+					// 加密传输websocket响应体
+					if isWebsocket {
+						ctxt.Log_P("Response looks like websocket upgrade.")
+
+						// According to resp.Body documentation:
+						// As of Go 1.12, the Body will also implement io.Writer
+						// on a successful "101 Switching Protocols" response,
+						// as used by WebSockets and HTTP/2's "h2c" mode.
+						wsConn, ok := resp.Body.(io.ReadWriter)
+						if !ok {
+							ctxt.WarnP("Unable to use Websocket connection")
+							return false
+						}
+						proxy.proxyWebsocket(ctxt, wsConn, tlsConn)
+						// We can't reuse connection after WebSocket handshake,
+						// by returning false here, the underlying connection will be closed
+						return false
+					}
+
+					// 加密传输http body(区分chunked传输和普通传输)
+					if resp.Request.Method == http.MethodHead ||
+						(resp.StatusCode >= 100 && resp.StatusCode < 200) ||
+						resp.StatusCode == http.StatusNoContent ||
+						resp.StatusCode == http.StatusNotModified {
+						// Don't write out a response body, when it's not allowed
+						// in RFC7230
+					} else {
+						if bodyModified {
+							chunked := newChunkedWriter(tlsConn)
+							if _, err := io.Copy(chunked, resp.Body); err != nil {
+								ctxt.WarnP("Cannot write TLS response body from mitm'd client: %v", err)
+								return false
+							}
+							if err := chunked.Close(); err != nil {
+								ctxt.WarnP("Cannot write TLS chunked EOF from mitm'd client: %v", err)
+								return false
+							}
+							if _, err = io.WriteString(tlsConn, "\r\n"); err != nil {
+								ctxt.WarnP("Cannot write TLS response chunked trailer from mitm'd client: %v", err)
+								return false
+							}
+						} else {
+							if _, err := io.Copy(tlsConn, resp.Body); err != nil {
+								ctxt.WarnP("Cannot write TLS response body from mitm'd client: %v", err)
+								return false
+							}
+							if err := tlsConn.Close(); err != nil {
+								ctxt.WarnP("Cannot write TLS EOF from mitm'd client: %v", err)
+								return false
+							}
+						}
+					}
+					return true
+				}(req); !continueLoop {
+					return
+				}
+			}
+			ctxt.Log_P("Exiting on EOF")
+		}()
 	}
 }

@@ -15,11 +15,13 @@ func main() {
 	flag.Parse()
 	proxy := mproxy.NewCoreHttpSever()
 	proxy.Verbose = *verbose
-
+	proxy.AllowHTTP2 = false
+	proxy.KeepHeader = false  // 不保留代理头部
 	mproxy.PrintReqHeader(proxy)
 	mproxy.PrintRespHeader(proxy)
 	mproxy.AddTrafficMonitor(proxy)
-	mproxy.StatusChange(proxy)
+	//mproxy.StatusChange(proxy)
+	mproxy.MitmMode(proxy)
 
 	s := http.Server{
 		Addr: *addr,
