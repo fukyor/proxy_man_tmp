@@ -362,6 +362,7 @@ func (proxy *CoreHttpServer) MyHttpsHandle(w http.ResponseWriter, r *http.Reques
 			}
 			reqTlsReader := http1parser.NewRequestReader(proxy.PreventParseHeader, tlsConn)
 
+			// 死循环维持隧道，理论上用for即可，这里是防御性编程
 			for !reqTlsReader.IsEOF() {
 				// 获得格式化或非格式化请求头(由PreventParseHeader决定)
 				req, err := reqTlsReader.ReadRequest()
@@ -372,6 +373,7 @@ func (proxy *CoreHttpServer) MyHttpsHandle(w http.ResponseWriter, r *http.Reques
 					core_proxy:   proxy,
 					UserData:     ctxt.UserData, //如果用户在 HandleConnect 处理器中设置了 UserData 或 RoundTripper，则继承保留
 					RoundTripper: ctxt.RoundTripper,
+					TrafficCounter: nil,
 				}
 				if err != nil && !errors.Is(err, io.EOF) {
 					ctxt.WarnP("TlsConn解析http请求失败Cannot read TLS request client %v %v", r.Host, err)
@@ -514,6 +516,8 @@ func (proxy *CoreHttpServer) MyHttpsHandle(w http.ResponseWriter, r *http.Reques
 								ctxt.WarnP("Cannot write TLS EOF from mitm'd client: %v", err)
 								return false
 							}
+							// 优化，执行到这里肯定已经是client或server决定关闭隧道，我们就不需要再循环了
+							return false
 						}
 					}
 					return true

@@ -11,6 +11,9 @@ import (
 func AddTrafficMonitor(proxy *CoreHttpServer) {
 	// 请求阶段
 	proxy.HookOnReq().DoFunc(func(req *http.Request, ctx *Pcontext) (*http.Request, *http.Response) {
+		if ctx.TrafficCounter == nil {
+			return req, nil
+		}
 		// 记录请求头大小
 		ctx.TrafficCounter.req_header = GetHeaderSize(req, ctx)
 		// 如果有请求体，包装它
