@@ -22,7 +22,7 @@ func main() {
 	mproxy.PrintRespHeader(proxy)
 	mproxy.AddTrafficMonitor(proxy)
 	//mproxy.StatusChange(proxy)
-	mproxy.MitmMode(proxy)
+	mproxy.HttpMitmMode(proxy)
 
 	// 注册一个请求钩子来注入 httptrace
     proxy.HookOnReq().DoFunc(func(req *http.Request, ctx *mproxy.Pcontext) (*http.Request, *http.Response) {

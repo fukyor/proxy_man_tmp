@@ -9,11 +9,11 @@ import (
 	"io"
 	"net"
 	"net/http"
+	"net/http/httputil"
 	"net/url"
 	"proxy_man/http1parser"
 	"proxy_man/signer"
 	"strings"
-	"strconv"
 	"sync"
 	"sync/atomic"
 )
@@ -194,7 +194,7 @@ func (proxy *CoreHttpServer) MyHttpsHandle(w http.ResponseWriter, r *http.Reques
 
 	strategy, host := OkConnect, r.URL.Host
 
-	//
+	// 切换处理状态
 	for i, h := range proxy.httpsHandlers {
 		new_strategy, newhost := h.HandleConnect(host, ctxt)
 		// 和resphook一样返回nil说明没有匹配上条件，如果不等于nil则匹配上了就替换新的策略
@@ -223,9 +223,14 @@ func (proxy *CoreHttpServer) MyHttpsHandle(w http.ResponseWriter, r *http.Reques
 			ctxt.WarnP("200 Connection fail established")
 			return
 		}
-		// 断言是否实现了半连接接口，net.conn一般是自动实现了的。实现半连接接口就是实现用系统调用shutdown来对socket进行半关闭
-		targetTCP, targetOK := connRemoteSite.(halfClosable)
-		proxyClientTCP, clientOK := connFromClinet.(halfClosable)
+
+
+		// 统计上行流量
+		targetTCP, targetOK := newTunnelTrafficTarget(connRemoteSite)
+		// 统计下行流量
+		proxyClientTCP, clientOK := newTunnelTrafficClient(connFromClinet)
+		connTarget := newtunnelTrafficTargetNoClosable(connRemoteSite)
+		connClient := newtunnelTrafficClientNoClosable(connFromClinet)
 		if targetOK && clientOK {
 			go func() {
 				var wg sync.WaitGroup
@@ -241,17 +246,21 @@ func (proxy *CoreHttpServer) MyHttpsHandle(w http.ResponseWriter, r *http.Reques
 			}()
 		} else {
 			go func() {
-				err := copyOrWarn(ctxt, connRemoteSite, connFromClinet)
+				// 使用包装后的 reader/writer 进行流量统计
+				err := copyOrWarn(ctxt, connTarget, connClient)
 				if err != nil && proxy.ConnectionErrHandler != nil {
+					// 向客户端发送错误信息
 					proxy.ConnectionErrHandler(connFromClinet, ctxt, err)
 				}
-				// 关闭server端，因为server对client的关闭是无法感知的，需要proxy通知
-				_ = connRemoteSite.Close()
+				_ = connTarget.Close()
 			}()
 
 			go func() {
-				_ = copyOrWarn(ctxt, connFromClinet, connRemoteSite)
-				_ = connFromClinet.Close()
+				_ = copyOrWarn(ctxt, connClient, connTarget)
+				// 输出隧道流量统计
+				ctxt.Log_P("[隧道流量统计] 目标: %s | 上行: %d (包含头部) | 下行: %d | 总计: %d",
+					host, connTarget.nwrite, connClient.nread, connTarget.nwrite + connClient.nread)
+				_ = connClient.Close()
 			}()
 		}
 	// 调用用户自己的劫持逻辑，暂时没想到怎么使用
@@ -286,7 +295,12 @@ func (proxy *CoreHttpServer) MyHttpsHandle(w http.ResponseWriter, r *http.Reques
 				return
 			}
 			requestOk := func(req *http.Request) bool {
-
+				ctxt := &Pcontext{
+					core_proxy:     proxy,
+					Req:            req,
+					TrafficCounter: &TrafficCounter{}, // 创建独立计数器
+					Session:        atomic.AddInt64(&proxy.sess, 1),
+				}
 				// 模仿标准库为request绑定上下文
 				requestContext, CancelR := context.WithCancel(req.Context())
 				req = req.WithContext(requestContext)
@@ -304,7 +318,7 @@ func (proxy *CoreHttpServer) MyHttpsHandle(w http.ResponseWriter, r *http.Reques
 							ctxt.WarnP("http远程拨号失败Http MITM Error dialing to %s: %s", host, err.Error())
 							return false
 						}
-						    // 打印目标IP地址
+						// 打印目标IP地址
 						if remoteAddr := connRemoteSite.RemoteAddr(); remoteAddr != nil {
 							ctxt.Log_P("目标ip: %s (host: %s)", remoteAddr.String(), host)
 						}
@@ -328,13 +342,47 @@ func (proxy *CoreHttpServer) MyHttpsHandle(w http.ResponseWriter, r *http.Reques
 				}
 				// 响应处理
 				resp = proxy.filterResponse(resp, ctxt)
-				defer resp.Body.Close() // 只是把当前连接标记为空闲，连接依然在resp.Body中存在。
+				defer resp.Body.Close()
 
-				// 将resp的响应头和body完整发送给客户端
-				err = resp.Write(connFromClinet)
+				// 使用 httputil.DumpResponse 获取完整头部（包含状态行）
+				headerBytes, err := httputil.DumpResponse(resp, false)
 				if err != nil {
+					ctxt.WarnP("httpMItm DumpResponse error: %v", err)
 					httpError(connFromClinet, ctxt, err)
 					return false
+				}
+
+				// 一次性写入头部
+				if _, err := connFromClinet.Write(headerBytes); err != nil {
+					ctxt.WarnP("httpMItm Cannot write HTTP response header: %v", err)
+					httpError(connFromClinet, ctxt, err)
+					return false
+				}
+
+				// 写入响应体（移除重复关闭，统一在 defer 中关闭）
+				if resp.Body != nil {
+					isChunked := len(resp.TransferEncoding) > 0 &&
+						strings.EqualFold(resp.TransferEncoding[len(resp.TransferEncoding)-1], "chunked")
+
+					if isChunked {
+						chunked := newChunkedWriter(connFromClinet)
+						if _, err := io.Copy(chunked, resp.Body); err != nil {
+							ctxt.WarnP("httpMItm Cannot write HTTP response body: %v", err)
+							httpError(connFromClinet, ctxt, err)
+							return false
+						}
+						if err := chunked.Close(); err != nil {
+							ctxt.WarnP("httpMItm Cannot write HTTP chunked EOF: %v", err)
+							httpError(connFromClinet, ctxt, err)
+							return false
+						}
+					} else {
+						if _, err := io.Copy(connFromClinet, resp.Body); err != nil {
+							ctxt.WarnP("httpMItm Cannot write HTTP response body: %v", err)
+							httpError(connFromClinet, ctxt, err)
+							return false
+						}
+					}
 				}
 				return true
 			}
@@ -356,7 +404,6 @@ func (proxy *CoreHttpServer) MyHttpsHandle(w http.ResponseWriter, r *http.Reques
 			}
 		}
 		go func() {
-			// TODO: cache connections to the remote website		
 			tlsConn := tls.Server(connFromClinet, tlsConfig)
 			defer tlsConn.Close()
 			// 完成和client的握手
@@ -372,12 +419,12 @@ func (proxy *CoreHttpServer) MyHttpsHandle(w http.ResponseWriter, r *http.Reques
 				req, err := reqTlsReader.ReadRequest()
 
 				ctxt := &Pcontext{
-					Req:          req,
-					Session:      atomic.AddInt64(&proxy.sess, 1),
-					core_proxy:   proxy,
-					UserData:     ctxt.UserData, //如果用户在 HandleConnect 处理器中设置了 UserData 或 RoundTripper，则继承保留
-					RoundTripper: ctxt.RoundTripper,
-					TrafficCounter: nil,
+					Req:            req,
+					Session:        atomic.AddInt64(&proxy.sess, 1),
+					core_proxy:     proxy,
+					UserData:       ctxt.UserData, //如果用户在 HandleConnect 处理器中设置了 UserData 或 RoundTripper，则继承保留
+					RoundTripper:   ctxt.RoundTripper,
+					TrafficCounter: &TrafficCounter{},
 				}
 				if err != nil && !errors.Is(err, io.EOF) {
 					ctxt.WarnP("TlsConn解析http请求失败Cannot read TLS request client %v %v", r.Host, err)
@@ -385,9 +432,9 @@ func (proxy *CoreHttpServer) MyHttpsHandle(w http.ResponseWriter, r *http.Reques
 				if err != nil {
 					return
 				}
-				
+
 				req.RemoteAddr = r.RemoteAddr
-				ctxt.Log_P("client ip: %v, request Host %v",r.RemoteAddr, r.Host)
+				ctxt.Log_P("client ip: %v, request Host %v", r.RemoteAddr, r.Host)
 
 				if !strings.HasPrefix(req.URL.String(), "https://") {
 					req.URL, err = url.Parse("https://" + r.Host + req.URL.String())
@@ -432,17 +479,7 @@ func (proxy *CoreHttpServer) MyHttpsHandle(w http.ResponseWriter, r *http.Reques
 					bodyModified := resp.Body != origBody
 					defer resp.Body.Close()
 
-					// 写入响应状态行
-					text := resp.Status
-					statusCode := strconv.Itoa(resp.StatusCode) + " "
-					text = strings.TrimPrefix(text, statusCode)
-					// 使用tlsConn可以自动加密写入
-					if _, err := io.WriteString(tlsConn, "HTTP/1.1"+" "+statusCode+text+"\r\n"); err != nil {
-						ctxt.WarnP("响应数据加密失败Cannot write TLS response HTTP status from mitm'd client: %v", err)
-						return false
-					}
-
-					// 加密写入响应头
+					// 检查是否为 WebSocket
 					isWebsocket := isWebSocketHandshake(resp.Header)
 					if isWebsocket || resp.Request.Method == http.MethodHead {
 						// don't change Content-Length for HEAD request
@@ -461,19 +498,20 @@ func (proxy *CoreHttpServer) MyHttpsHandle(w http.ResponseWriter, r *http.Reques
 					if !isWebsocket {
 						resp.Header.Set("Connection", "close")
 					}
-					if err := resp.Header.Write(tlsConn); err != nil {
-						ctxt.WarnP("Cannot write TLS response header from mitm'd client: %v", err)
-						return false
-					}
-					if _, err = io.WriteString(tlsConn, "\r\n"); err != nil {
-						ctxt.WarnP("Cannot write TLS response header end from mitm'd client: %v", err)
-						return false
-					}
 
 					// 加密传输websocket响应体
 					if isWebsocket {
+						// websocket响应写回响应头
+						headerBytes, err := httputil.DumpResponse(resp, false)
+						if err != nil {
+							ctxt.WarnP("Cannot dump TLS response header: %v", err)
+							return false
+						}
+						if _, err := tlsConn.Write(headerBytes); err != nil {
+							ctxt.WarnP("Cannot write WebSocket response header: %v", err)
+							return false
+						}
 						ctxt.Log_P("Response looks like websocket upgrade.")
-
 						// According to resp.Body documentation:
 						// As of Go 1.12, the Body will also implement io.Writer
 						// on a successful "101 Switching Protocols" response,
@@ -486,6 +524,17 @@ func (proxy *CoreHttpServer) MyHttpsHandle(w http.ResponseWriter, r *http.Reques
 						proxy.proxyWebsocket(ctxt, wsConn, tlsConn)
 						// We can't reuse connection after WebSocket handshake,
 						// by returning false here, the underlying connection will be closed
+						return false
+					}
+
+					// 普通响应写回响应头
+					headerBytes, err := httputil.DumpResponse(resp, false)
+					if err != nil {
+						ctxt.WarnP("Cannot dump TLS response header: %v", err)
+						return false
+					}
+					if _, err := tlsConn.Write(headerBytes); err != nil {
+						ctxt.WarnP("Cannot write TLS response header from mitm'd client: %v", err)
 						return false
 					}
 
