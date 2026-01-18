@@ -238,17 +238,35 @@ func (proxy *CoreHttpServer) MyHttpsHandle(w http.ResponseWriter, r *http.Reques
 			return
 		}
 
-		// 统计上行流量
-		targetTCP, targetOK := newTunnelTrafficTarget(connRemoteSite)
-		// 统计下行流量
+		// 用client端统计上行流量和下行流量
 		proxyClientTCP, clientOK := newTunnelTrafficClient(connFromClinet)
-		connTarget := newtunnelTrafficTargetNoClosable(connRemoteSite)
 		connClient := newtunnelTrafficClientNoClosable(connFromClinet)
+		// 这里不需要计数请求了
+		Counter_Ctxt := &Pcontext{
+			core_proxy:     proxy,
+			Req:            r,
+			tunnelTrafficClient: proxyClientTCP,
+			tunnelTrafficClientNoClosable: connClient,
+			Session: ctxt.Session,
+		}
+		// 使用闭包捕获 Counter_Ctxt，访问其流量数据
+		proxyClientTCP.onUpdate = func() {
+			Counter_Ctxt.Log_P("[流量统计] 上行: %d | 下行: %d | 总计: %d ",
+				Counter_Ctxt.tunnelTrafficClient.nread,
+				Counter_Ctxt.tunnelTrafficClient.nwrite,
+				Counter_Ctxt.tunnelTrafficClient.nread + Counter_Ctxt.tunnelTrafficClient.nwrite,
+				)
+		}
+
+		targetTCP, targetOK := connRemoteSite.(halfClosable)
+		
 		if targetOK && clientOK {
+			ctxt.Log_P("支持半关闭")
 			go func() {
 				var wg sync.WaitGroup
 				wg.Add(2)
-				// io.copy退出阻塞直接原因不是FIN，而是contenlenght和chunked的结束符。所以说每一次请求对应一个iocopy，而是每一个连接对应一个iocopy
+				// io.copy的退出取决于参数接口的行为，如果参数是req.Body / resp.Body就会在读到Content-Length / Chunk结束符退出。
+				// 这里参数是net.Conn接口，net.Conn的底层行为是和tcp socket的生命周期一致，会一直保持到tcp断开
 				go copyAndClose(ctxt, targetTCP, proxyClientTCP, &wg)
 				go copyAndClose(ctxt, proxyClientTCP, targetTCP, &wg)
 				wg.Wait()
@@ -259,20 +277,17 @@ func (proxy *CoreHttpServer) MyHttpsHandle(w http.ResponseWriter, r *http.Reques
 		} else {
 			go func() {
 				// 使用包装后的 reader/writer 进行流量统计
-				err := copyOrWarn(ctxt, connTarget, connClient)
+				err := copyOrWarn(ctxt, targetTCP, proxyClientTCP)
 				if err != nil && proxy.ConnectionErrHandler != nil {
 					// 向客户端发送错误信息
 					proxy.ConnectionErrHandler(connFromClinet, ctxt, err)
 				}
-				_ = connTarget.Close()
+				_ = targetTCP.Close()
 			}()
 
 			go func() {
-				_ = copyOrWarn(ctxt, connClient, connTarget)
-				// 输出隧道流量统计
-				ctxt.Log_P("[隧道流量统计] 目标: %s | 上行: %d (包含头部) | 下行: %d | 总计: %d",
-					host, connTarget.nwrite, connClient.nread, connTarget.nwrite+connClient.nread)
-				_ = connClient.Close()
+				_ = copyOrWarn(ctxt, proxyClientTCP, targetTCP)
+				_ = proxyClientTCP.Close()
 			}()
 		}
 	// 调用用户自己的劫持逻辑，暂时没想到怎么使用
@@ -392,9 +407,8 @@ func (proxy *CoreHttpServer) MyHttpsHandle(w http.ResponseWriter, r *http.Reques
 							return false
 						}
 					} else {
-						// 每一次请求对应一个iocopy。
-						// 因为 io.copy退出阻塞直接原因不是FIN，而是contenlenght和chunked的结束符。所以说每一次请求对应一个iocopy，而是每一个连接对应一个iocopy
-						// io.Copy是属于应用层传输主要根据数据流结束标志进行退出(contenlenght和chunked的结束符)
+						// io.copy的退出取决于参数接口的行为，如果参数是net.Conn接口，会一直保持到tcp断开，因为net.Conn的底层行为是和tcp socket的生命周期一致，
+						// 这里参数是req.Body / resp.Body会在读到Content-Length / Chunk结束符退出。
 						if _, err := io.Copy(connFromClinet, resp.Body); err != nil {
 							ctxt.WarnP("httpMItm Cannot write HTTP response body: %v", err)
 							httpError(connFromClinet, ctxt, err)
