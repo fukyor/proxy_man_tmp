@@ -50,6 +50,19 @@ type halfClosable interface {
 
 var _ halfClosable = (*net.TCPConn)(nil)
 
+func httpMitmCheckError(err error) (isConnClosed bool) {
+	isConnClosed = errors.Is(err, io.EOF) || errors.Is(err, net.ErrClosed)
+	// net.OpError 表示网络层面的错误，通常意味着连接已被对方关闭
+	if err != nil && !isConnClosed {
+		var netErr *net.OpError
+		if errors.As(err, &netErr) {
+			// 网络操作错误通常表示连接关闭，不打印警告
+			isConnClosed = true
+		}
+	}
+	return
+}
+
 func stripPort(s string) string {
 	var ix int
 	if strings.Contains(s, "[") && strings.Contains(s, "]") {
@@ -172,6 +185,7 @@ func copyOrWarn(ctx *Pcontext, dst io.Writer, src io.Reader) error {
 }
 
 func (proxy *CoreHttpServer) MyHttpsHandle(w http.ResponseWriter, r *http.Request) {
+	// 只是为了统计connect的session号
 	ctxt := &Pcontext{
 		core_proxy:     proxy,
 		Req:            r,
@@ -224,7 +238,6 @@ func (proxy *CoreHttpServer) MyHttpsHandle(w http.ResponseWriter, r *http.Reques
 			return
 		}
 
-
 		// 统计上行流量
 		targetTCP, targetOK := newTunnelTrafficTarget(connRemoteSite)
 		// 统计下行流量
@@ -235,9 +248,8 @@ func (proxy *CoreHttpServer) MyHttpsHandle(w http.ResponseWriter, r *http.Reques
 			go func() {
 				var wg sync.WaitGroup
 				wg.Add(2)
-				// 向remote写完所有数据后，proxy关闭写发出FIN，remote收到FIN，完成读取后，调用close回复FIN，完成挥手
+				// io.copy退出阻塞直接原因不是FIN，而是contenlenght和chunked的结束符。所以说每一次请求对应一个iocopy，而是每一个连接对应一个iocopy
 				go copyAndClose(ctxt, targetTCP, proxyClientTCP, &wg)
-				// 向client写完所有数据后，proxy关闭写发出FIN，client收到FIN，完成读取后，调用close回复FIN，完成挥手
 				go copyAndClose(ctxt, proxyClientTCP, targetTCP, &wg)
 				wg.Wait()
 				// 最后调用close保证了连接能够正常断开
@@ -259,7 +271,7 @@ func (proxy *CoreHttpServer) MyHttpsHandle(w http.ResponseWriter, r *http.Reques
 				_ = copyOrWarn(ctxt, connClient, connTarget)
 				// 输出隧道流量统计
 				ctxt.Log_P("[隧道流量统计] 目标: %s | 上行: %d (包含头部) | 下行: %d | 总计: %d",
-					host, connTarget.nwrite, connClient.nread, connTarget.nwrite + connClient.nread)
+					host, connTarget.nwrite, connClient.nread, connTarget.nwrite+connClient.nread)
 				_ = connClient.Close()
 			}()
 		}
@@ -288,7 +300,9 @@ func (proxy *CoreHttpServer) MyHttpsHandle(w http.ResponseWriter, r *http.Reques
 		for !reqReader.IsEOF() {
 			// 从client提取请求头部
 			req, err := reqReader.ReadRequest()
-			if err != nil && !errors.Is(err, io.EOF) {
+			// 检查是否是正常的连接关闭错误（EOF, ErrClosed, 或 net.OpError 导致的连接关闭）
+			isConnClosed := httpMitmCheckError(err)
+			if err != nil && !isConnClosed {
 				ctxt.WarnP("http协议解析错误http parser errror: %+#v", err)
 			}
 			if err != nil {
@@ -305,6 +319,7 @@ func (proxy *CoreHttpServer) MyHttpsHandle(w http.ResponseWriter, r *http.Reques
 				requestContext, CancelR := context.WithCancel(req.Context())
 				req = req.WithContext(requestContext)
 				defer CancelR()
+
 				req.RemoteAddr = r.RemoteAddr
 				ctxt.Log_P("req %v", r.Host)
 				ctxt.Req = req
@@ -377,6 +392,9 @@ func (proxy *CoreHttpServer) MyHttpsHandle(w http.ResponseWriter, r *http.Reques
 							return false
 						}
 					} else {
+						// 每一次请求对应一个iocopy。
+						// 因为 io.copy退出阻塞直接原因不是FIN，而是contenlenght和chunked的结束符。所以说每一次请求对应一个iocopy，而是每一个连接对应一个iocopy
+						// io.Copy是属于应用层传输主要根据数据流结束标志进行退出(contenlenght和chunked的结束符)
 						if _, err := io.Copy(connFromClinet, resp.Body); err != nil {
 							ctxt.WarnP("httpMItm Cannot write HTTP response body: %v", err)
 							httpError(connFromClinet, ctxt, err)
