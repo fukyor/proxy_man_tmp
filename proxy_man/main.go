@@ -17,7 +17,8 @@ func main() {
 	proxy := mproxy.NewCoreHttpSever()
 	proxy.Verbose = *verbose
 	proxy.AllowHTTP2 = false
-	proxy.KeepHeader = false  // 不保留代理头部
+	proxy.PreventParseHeader = false
+	proxy.KeepDestHeaders = false
 
 	// 使用 LogCollector 包装原有 Logger
 	proxy.Logger = mproxy.NewLogCollector(proxy.Logger)
@@ -27,7 +28,7 @@ func main() {
 	mproxy.AddTrafficMonitor(proxy)
 	//mproxy.StatusChange(proxy)
 	//mproxy.HttpMitmMode(proxy)
-	//mproxy.HttpsMitmMode(proxy)
+	mproxy.HttpsMitmMode(proxy)
 
 
 	// 启动 WebSocket 控制服务

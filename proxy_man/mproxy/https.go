@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"log"
 	"net"
 	"net/http"
 	"net/http/httputil"
@@ -260,8 +261,8 @@ func (proxy *CoreHttpServer) MyHttpsHandle(w http.ResponseWriter, r *http.Reques
 			RemoteAddr:  r.RemoteAddr,
 			Protocol:    "HTTPS-Tunnel",
 			StartTime:   time.Now(),
-			UploadRef:   &proxyClientTCP.nwrite,
-			DownloadRef: &proxyClientTCP.nread,
+			UploadRef:   &proxyClientTCP.nread,   // nread = 从客户端读 = Upload
+			DownloadRef: &proxyClientTCP.nwrite,  // nwrite = 写给客户端 = Download
 		})
 
 		// 使用闭包(捕获了外部变量的匿名函数)捕获 Counter_Ctxt，访问其流量数据
@@ -530,6 +531,7 @@ func (proxy *CoreHttpServer) MyHttpsHandle(w http.ResponseWriter, r *http.Reques
 
 					// https已经解析成功，我们可以查看请求
 					req, resp := proxy.filterRequest(req, ctxt)
+					log.Printf("google请求头已解析")
 					if resp == nil {
 						if err != nil {
 							if req.URL != nil {
@@ -539,9 +541,9 @@ func (proxy *CoreHttpServer) MyHttpsHandle(w http.ResponseWriter, r *http.Reques
 							}
 							return false
 						}
-						if !proxy.KeepHeader {
-							RemoveProxyHeaders(ctxt, req)
-						}
+						
+						RemoveProxyHeaders(ctxt, req)
+
 						resp, err = func() (*http.Response, error) {
 							// 关闭req的读取器很重要，因为req上传文件时，是需要从body中流式读取的，并不是都从map中读取。关闭后避免roundtrip数据竞争
 							defer req.Body.Close()
@@ -660,7 +662,7 @@ func (proxy *CoreHttpServer) MyHttpsHandle(w http.ResponseWriter, r *http.Reques
 				}
 			}
 			// 正常退出，收到client EOF
-			ctxt.Log_P("Exiting on EOF")
+			ctxt.Log_P("Normal Exiting on EOF")
 		}()
 	}
 }

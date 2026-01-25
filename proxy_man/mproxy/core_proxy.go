@@ -29,12 +29,11 @@ type CoreHttpServer struct{
 
 	Logger Logger
 	Verbose bool
-	KeepHeader bool
 	sess	int64 // 全局日志ID，每来一个请求都加1
 
 	AllowHTTP2 bool
-	PreventParseHeader bool
-	KeepCurHeaders bool
+	PreventParseHeader bool // 是否保使用用户的非标头部，默认false。除了RPC，一般不会需要非标头部
+	KeepDestHeaders bool  	// 是否保留已设置的响应头，默认fase。我们通常没有自己设置响应头，都是使用resp响应头
 	KeepAcceptEncoding bool
 
 	Connections sync.Map // int64 (Session) -> *ConnectionInfo

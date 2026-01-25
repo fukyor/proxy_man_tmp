@@ -90,7 +90,7 @@ func (proxy *CoreHttpServer) MyHttpHandle(w http.ResponseWriter, r *http.Request
 		resp.Header.Del("Content-Length")
 	}
 	// 封装响应头
-	buildHeaders(w.Header(), resp.Header, proxy.KeepCurHeaders)
+	buildHeaders(w.Header(), resp.Header, proxy.KeepDestHeaders)
 	w.WriteHeader(resp.StatusCode)
 
 	var bodyWriter io.Writer = w
