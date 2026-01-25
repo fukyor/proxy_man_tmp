@@ -1,0 +1,15 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(go mod tidy:*)",
+      "Bash(go build:*)",
+      "Bash(go env:*)",
+      "Bash(set GO111MODULE=on:*)"
+    ],
+    "deny": [
+      "Read(./node_modules/**)"
+    ],
+    "ask": []
+  },
+  "alwaysThinkingEnabled": true
+}
