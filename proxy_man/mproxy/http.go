@@ -59,11 +59,11 @@ func (proxy *CoreHttpServer) MyHttpHandle(w http.ResponseWriter, r *http.Request
 
 	// 在流量统计关闭回调中注销（确保流量统计完成后再删除）
 	if resp != nil && resp.Body != nil {
-		if trafficCounter, ok := resp.Body.(*TrafficCounter); ok {
-			originalOnClose := trafficCounter.onClose
-			trafficCounter.onClose = func(bodyBytes int64) {
+		if rBReader, ok := resp.Body.(*respBodyReader); ok {
+			originalOnClose := rBReader.onClose
+			rBReader.onClose = func() {
 				if originalOnClose != nil {
-					originalOnClose(bodyBytes)
+					originalOnClose()
 				}
 				proxy.Connections.Delete(ctxt.Session)
 			}
@@ -85,7 +85,7 @@ func (proxy *CoreHttpServer) MyHttpHandle(w http.ResponseWriter, r *http.Request
 		return  // hanler函数结束后，go会自动释放连接
 	}
 
-	//不用担心Content-Length被删除的问题，会自动降级为chunked模式，
+	//不用担心Content-Length被删除的问题，会自动降级为chunked模式，go服务器自动处理chunked传输
 	if oriBody != resp.Body {
 		resp.Header.Del("Content-Length")
 	}

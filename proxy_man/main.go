@@ -26,7 +26,7 @@ func main() {
 	// mproxy.PrintRespHeader(proxy)
 	mproxy.AddTrafficMonitor(proxy)
 	//mproxy.StatusChange(proxy)
-	mproxy.HttpMitmMode(proxy)
+	//mproxy.HttpMitmMode(proxy)
 	//mproxy.HttpsMitmMode(proxy)
 
 
