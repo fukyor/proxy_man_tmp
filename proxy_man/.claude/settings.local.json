@@ -1,0 +1,18 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(go mod tidy:*)",
+      "Bash(go build:*)",
+      "Bash(go env:*)",
+      "Bash(set GO111MODULE=on:*)",
+      "Bash(dir:*)",
+      "Bash(start /B proxy_man.exe -v)",
+      "Bash(timeout:*)"
+    ],
+    "deny": [
+      "Read(/test1.go)"
+    ],
+    "ask": []
+  },
+  "alwaysThinkingEnabled": true
+}
