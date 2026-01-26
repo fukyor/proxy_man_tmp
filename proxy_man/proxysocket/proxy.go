@@ -119,6 +119,9 @@ func handleWebSocket(w http.ResponseWriter, r *http.Request) {
 			hub.updateSubscription(sub, msg)
 		case "closeAllConnections":
 			hub.proxy.Connections.Range(func(key, value any) bool {
+				if info, ok := value.(*mproxy.ConnectionInfo); ok && info.OnClose != nil {
+					info.OnClose()
+				}
 				hub.proxy.Connections.Delete(key)
 				return true
 			})

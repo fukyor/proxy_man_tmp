@@ -39,6 +39,7 @@ func (h *WebSocketHub) sendTo(conn *websocket.Conn, sub *Subscription, msg any) 
 }
 
 // 广播到订阅指定主题的客户端
+// 这里完美解决了每个客户端的个性化订阅
 func (h *WebSocketHub) broadcastToTopic(topic string, msg any) {
 	h.clients.Range(func(key, value any) bool {
 		conn := key.(*websocket.Conn)

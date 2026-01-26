@@ -263,6 +263,7 @@ func (proxy *CoreHttpServer) MyHttpsHandle(w http.ResponseWriter, r *http.Reques
 			StartTime:   time.Now(),
 			UploadRef:   &proxyClientTCP.nread,   // nread = 从客户端读 = Upload
 			DownloadRef: &proxyClientTCP.nwrite,  // nwrite = 写给客户端 = Download
+			OnClose:     func() { connFromClinet.Close() },
 		})
 
 		// 使用闭包(捕获了外部变量的匿名函数)捕获 Counter_Ctxt，访问其流量数据
@@ -340,6 +341,10 @@ func (proxy *CoreHttpServer) MyHttpsHandle(w http.ResponseWriter, r *http.Reques
 			if err != nil {
 				return
 			}
+			requestContext, finishRequest := context.WithCancel(req.Context())
+			req = req.WithContext(requestContext)
+			defer finishRequest()
+
 			requestOk := func(req *http.Request) bool {
 				ctxt := &Pcontext{
 					core_proxy:     proxy,
@@ -359,6 +364,7 @@ func (proxy *CoreHttpServer) MyHttpsHandle(w http.ResponseWriter, r *http.Reques
 					StartTime:   time.Now(),
 					UploadRef:   &ctxt.TrafficCounter.req_body,
 					DownloadRef: &ctxt.TrafficCounter.resp_body,
+					OnClose:     func() { finishRequest() },
 				})
 				defer proxy.Connections.Delete(ctxt.Session) // 在请求完成后注销
 
@@ -509,6 +515,9 @@ func (proxy *CoreHttpServer) MyHttpsHandle(w http.ResponseWriter, r *http.Reques
 				}
 
 				if continueLoop := func(req *http.Request) bool {
+					requestContext, finishRequest := context.WithCancel(req.Context())
+					req = req.WithContext(requestContext)
+					defer finishRequest()
 					// 注册连接
 					proxy.Connections.Store(ctxt.Session, &ConnectionInfo{
 						Session:     ctxt.Session,
@@ -520,12 +529,9 @@ func (proxy *CoreHttpServer) MyHttpsHandle(w http.ResponseWriter, r *http.Reques
 						StartTime:   time.Now(),
 						UploadRef:   &ctxt.TrafficCounter.req_body,
 						DownloadRef: &ctxt.TrafficCounter.resp_body,
+						OnClose:     func() { finishRequest() },
 					})
 					defer proxy.Connections.Delete(ctxt.Session) // 在请求完成后注销
-
-					requestContext, finishRequest := context.WithCancel(req.Context())
-					req = req.WithContext(requestContext)
-					defer finishRequest()
 
 					ctxt.Req = req
 

@@ -6,11 +6,16 @@ import(
 	"sync/atomic"
 	"strings"
 	"time"
+	"context"
 )
 
 func (proxy *CoreHttpServer) MyHttpHandle(w http.ResponseWriter, r *http.Request){
 	var err error 
 	var oriBody io.ReadCloser
+
+	ctx, cancel := context.WithCancel(r.Context())
+	r = r.WithContext(ctx)
+	defer cancel() // 确保函数退出时清理 Context，避免内存泄露，context本质也是通道占用内存
 
 	ctxt := &Pcontext{
 		core_proxy: proxy,
@@ -30,6 +35,7 @@ func (proxy *CoreHttpServer) MyHttpHandle(w http.ResponseWriter, r *http.Request
 		StartTime:   time.Now(),
 		UploadRef:   &ctxt.TrafficCounter.req_body,
 		DownloadRef: &ctxt.TrafficCounter.resp_body,
+		OnClose:     func() { cancel() },
 	})
 
 	if !r.URL.IsAbs(){

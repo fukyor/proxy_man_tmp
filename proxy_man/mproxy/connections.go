@@ -12,4 +12,5 @@ type ConnectionInfo struct {
 	StartTime   time.Time `json:"startTime"`
 	UploadRef   *int64    `json:"-"`         // 引用流量计数器（用于读取实时值）
 	DownloadRef *int64    `json:"-"`
+	OnClose     func()    `json:"-"`
 }
