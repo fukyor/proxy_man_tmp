@@ -280,8 +280,6 @@ func (proxy *CoreHttpServer) MyHttpsHandle(w http.ResponseWriter, r *http.Reques
 			DownloadRef: &proxyClientTCP.nwrite,  // nwrite = 写给客户端 = Download
 			OnClose:     func() { connFromClinet.Close() },
 		})
-		tunnelUp = &proxyClientTCP.nread
-		tunnelDown = &proxyClientTCP.nwrite
 		
 		// 使用闭包(捕获了外部变量的匿名函数)捕获 Counter_Ctxt，访问其流量数据
 		proxyClientTCP.onUpdate = func() {
@@ -387,8 +385,6 @@ func (proxy *CoreHttpServer) MyHttpsHandle(w http.ResponseWriter, r *http.Reques
 					OnClose:     func() { finishRequest() },
 				})
 				defer proxy.Connections.Delete(ctxt.Session) // 在请求完成后注销
-				tunnelUp = &ctxt.TrafficCounter.req_sum
-				tunnelDown = &ctxt.TrafficCounter.resp_sum
 
 				// 模仿标准库为request绑定上下文
 				requestContext, CancelR := context.WithCancel(req.Context())
@@ -557,8 +553,6 @@ func (proxy *CoreHttpServer) MyHttpsHandle(w http.ResponseWriter, r *http.Reques
 						OnClose:     func() { finishRequest() },
 					})
 					defer proxy.Connections.Delete(ctxt.Session) // 在请求完成后注销
-					tunnelUp = &ctxt.TrafficCounter.req_sum
-					tunnelDown = &ctxt.TrafficCounter.resp_sum
 
 					ctxt.Req = req
 

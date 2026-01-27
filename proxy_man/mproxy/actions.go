@@ -16,6 +16,7 @@ func AddTrafficMonitor(proxy *CoreHttpServer) {
 		}
 		// 记录请求头大小
 		ctx.TrafficCounter.req_header = GetHeaderSize(req, ctx)
+		ctx.TrafficCounter.req_sum = ctx.TrafficCounter.req_header
 		GlobalTrafficUp.Add(ctx.TrafficCounter.req_header)
 		// 如果有请求体，包装它
 		if req.Body != nil {
@@ -36,10 +37,11 @@ func AddTrafficMonitor(proxy *CoreHttpServer) {
 			return resp
 		}
 		// 更新请求汇总
-		ctx.TrafficCounter.UpdateReqSum()
+		//ctx.TrafficCounter.UpdateReqSum()
 
 		// 记录响应头大小
 		ctx.TrafficCounter.resp_header = GetHeaderSize(resp, ctx)
+		ctx.TrafficCounter.resp_sum = ctx.TrafficCounter.resp_header
 		GlobalTrafficDown.Add(ctx.TrafficCounter.resp_header)
 
 		if resp.Body == nil {
@@ -57,7 +59,7 @@ func AddTrafficMonitor(proxy *CoreHttpServer) {
 			ReadCloser: resp.Body,
 			counter: ctx.TrafficCounter,
 			onClose: func() {
-				ctx.TrafficCounter.UpdateRespSum()
+				//ctx.TrafficCounter.UpdateRespSum()
 				ctx.TrafficCounter.UpdateTotal()
 				ctx.Log_P("[流量统计] 上行: %d (header:%d body:%d) | 下行: %d (header:%d body:%d) | 总计: %d | %s | %s | %s",
 					ctx.TrafficCounter.req_sum, ctx.TrafficCounter.req_header, ctx.TrafficCounter.req_body,

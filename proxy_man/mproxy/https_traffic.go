@@ -31,6 +31,7 @@ type reqBodyReader struct {
 
 func (r *reqBodyReader) Read(p []byte) (n int, err error) {
 	n, err = r.ReadCloser.Read(p)
+	r.counter.req_sum += int64(n)
 	r.counter.req_body += int64(n)
 	GlobalTrafficUp.Add(int64(n)) // 实时累加全局上行
 	return n, err
@@ -50,7 +51,8 @@ type respBodyReader struct {
 
 func (r *respBodyReader) Read(p []byte) (n int, err error) {
 	n, err = r.ReadCloser.Read(p)
-	r.counter.resp_body += int64(n)
+	r.counter.resp_sum += int64(n)
+	r.counter.resp_body += int64(n) // 记录响应体大小
 	GlobalTrafficDown.Add(int64(n)) // 实时累加全局下行
 	return n, err
 }
@@ -65,13 +67,13 @@ func (r *respBodyReader) Close() error {
 
 
 
-func (c *TrafficCounter) UpdateReqSum() {
-	c.req_sum = c.req_header + c.req_body
-}
+// func (c *TrafficCounter) UpdateReqSum() {
+// 	c.req_sum = c.req_header + c.req_body
+// }
 
-func (c *TrafficCounter) UpdateRespSum() {
-	c.resp_sum = c.resp_header + c.resp_body
-}
+// func (c *TrafficCounter) UpdateRespSum() {
+// 	c.resp_sum = c.resp_header + c.resp_body
+// }
 
 func (c *TrafficCounter) UpdateTotal(){
 	c.total = c.req_sum + c.resp_sum

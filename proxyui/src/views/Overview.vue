@@ -62,7 +62,7 @@
 </template>
 
 <script setup>
-import { ref, computed, onMounted, onUnmounted } from 'vue'
+import { ref, onMounted, onUnmounted } from 'vue'
 import { useWebSocketStore } from '@/stores/websocket'
 import { Chart, registerables } from 'chart.js'
 
@@ -75,6 +75,7 @@ const wsStore = useWebSocketStore()
 const chartCanvas = ref(null)
 const currentUpload = ref(0)
 const currentDownload = ref(0)
+const connections = ref([])
 
 let chart = null
 let unsubscribeTraffic = null
@@ -167,9 +168,7 @@ function updateChart(data) {
 
 // 更新连接列表
 function updateConnections(data) {
-  allConnections.value = data
-  // 主表格只显示顶层隧道连接（parentId === 0）
-  connections.value = data.filter(conn => conn.parentId === 0)
+  connections.value = data
 }
 
 
