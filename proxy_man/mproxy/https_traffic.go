@@ -66,15 +66,6 @@ func (r *respBodyReader) Close() error {
 }
 
 
-
-// func (c *TrafficCounter) UpdateReqSum() {
-// 	c.req_sum = c.req_header + c.req_body
-// }
-
-// func (c *TrafficCounter) UpdateRespSum() {
-// 	c.resp_sum = c.resp_header + c.resp_body
-// }
-
 func (c *TrafficCounter) UpdateTotal(){
 	c.total = c.req_sum + c.resp_sum
 }

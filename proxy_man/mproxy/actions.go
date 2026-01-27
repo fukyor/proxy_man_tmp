@@ -22,10 +22,12 @@ func AddTrafficMonitor(proxy *CoreHttpServer) {
 		if req.Body != nil {
 			// roundripe自动调用req.Body.read读取body
 			// roundripe从req的map中读取header
-			req.Body = &reqBodyReader{
-				ReadCloser: req.Body,
-				counter:    ctx.TrafficCounter,
-				onClose: 	nil,
+			req.Body = &TopTrafficReqBodyReader{
+				reqBodyReader: reqBodyReader{
+					ReadCloser: req.Body,
+					counter:    ctx.TrafficCounter,
+					onClose: 	nil,
+				},
 			}
 		}
 		return req, nil
@@ -36,8 +38,6 @@ func AddTrafficMonitor(proxy *CoreHttpServer) {
 		if ctx.TrafficCounter == nil {
 			return resp
 		}
-		// 更新请求汇总
-		//ctx.TrafficCounter.UpdateReqSum()
 
 		// 记录响应头大小
 		ctx.TrafficCounter.resp_header = GetHeaderSize(resp, ctx)
@@ -55,17 +55,18 @@ func AddTrafficMonitor(proxy *CoreHttpServer) {
 		}
 
 		// 包装响应体
-		resp.Body = &respBodyReader{
-			ReadCloser: resp.Body,
-			counter: ctx.TrafficCounter,
-			onClose: func() {
-				//ctx.TrafficCounter.UpdateRespSum()
-				ctx.TrafficCounter.UpdateTotal()
-				ctx.Log_P("[流量统计] 上行: %d (header:%d body:%d) | 下行: %d (header:%d body:%d) | 总计: %d | %s | %s | %s",
-					ctx.TrafficCounter.req_sum, ctx.TrafficCounter.req_header, ctx.TrafficCounter.req_body,
-					ctx.TrafficCounter.resp_sum, ctx.TrafficCounter.resp_header, ctx.TrafficCounter.resp_body,
-					ctx.TrafficCounter.total,
-					ctx.Req.Method, ctx.Req.URL.String(), resp.Status)
+		resp.Body = &TopTrafficRespBodyReader{
+			respBodyReader: respBodyReader {
+				ReadCloser: resp.Body,
+				counter: ctx.TrafficCounter,
+				onClose: func() {
+					ctx.TrafficCounter.UpdateTotal()
+					ctx.Log_P("[流量统计] 上行: %d (header:%d body:%d) | 下行: %d (header:%d body:%d) | 总计: %d | %s | %s | %s",
+						ctx.TrafficCounter.req_sum, ctx.TrafficCounter.req_header, ctx.TrafficCounter.req_body,
+						ctx.TrafficCounter.resp_sum, ctx.TrafficCounter.resp_header, ctx.TrafficCounter.resp_body,
+						ctx.TrafficCounter.total,
+						ctx.Req.Method, ctx.Req.URL.String(), resp.Status)
+				},
 			},
 		}
 
