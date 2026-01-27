@@ -17,6 +17,7 @@ func AddTrafficMonitor(proxy *CoreHttpServer) {
 		// 记录请求头大小
 		ctx.TrafficCounter.req_header = GetHeaderSize(req, ctx)
 		ctx.TrafficCounter.req_sum = ctx.TrafficCounter.req_header
+		ctx.parCtx.TrafficCounter.req_sum = ctx.TrafficCounter.req_header
 		GlobalTrafficUp.Add(ctx.TrafficCounter.req_header)
 		// 如果有请求体，包装它
 		if req.Body != nil {
@@ -26,7 +27,7 @@ func AddTrafficMonitor(proxy *CoreHttpServer) {
 				reqBodyReader: reqBodyReader{
 					ReadCloser: req.Body,
 					counter:    ctx.TrafficCounter,
-					onClose: 	nil,
+					onClose:    nil,
 				},
 			}
 		}
@@ -41,31 +42,34 @@ func AddTrafficMonitor(proxy *CoreHttpServer) {
 
 		// 记录响应头大小
 		ctx.TrafficCounter.resp_header = GetHeaderSize(resp, ctx)
-		ctx.TrafficCounter.resp_sum = ctx.TrafficCounter.resp_header
+		ctx.TrafficCounter.resp_sum = ctx.TrafficCounter.resp_header         // 子连接统计请求头大小
+		ctx.parCtx.TrafficCounter.resp_sum += ctx.TrafficCounter.resp_header // 父隧道统计请求头大小
 		GlobalTrafficDown.Add(ctx.TrafficCounter.resp_header)
 
 		if resp.Body == nil {
 			ctx.TrafficCounter.UpdateTotal()
-			ctx.Log_P("[流量统计] 上行: %d (header:%d body:%d) | 下行: %d (header:%d body:0) | 总计: %d | %s | %s | %s",
+			ctx.parCtx.TrafficCounter.UpdateTotal()
+			ctx.Log_P("[流量统计] 本次连接上行: %d (header:%d body:%d) | 本次连接下行: %d (header:%d body:0) | 本次连接总计: %d | 隧道总上行: %d | 隧道总下行: %d | 隧道流量总计: %d |  %s | %s | %s",
 				ctx.TrafficCounter.req_sum, ctx.TrafficCounter.req_header, ctx.TrafficCounter.req_body,
-				ctx.TrafficCounter.resp_header,
-				ctx.TrafficCounter.resp_header,
-				ctx.TrafficCounter.total, ctx.Req.Method, ctx.Req.URL.String(), "未响应")
+				ctx.TrafficCounter.resp_header, ctx.TrafficCounter.resp_header,ctx.TrafficCounter.total, 
+				ctx.parCtx.TrafficCounter.req_sum, ctx.parCtx.TrafficCounter.resp_sum, ctx.parCtx.TrafficCounter.total,
+				ctx.Req.Method, ctx.Req.URL.String(), "未响应")
 			return resp
 		}
 
 		// 包装响应体
 		resp.Body = &TopTrafficRespBodyReader{
-			respBodyReader: respBodyReader {
+			respBodyReader: respBodyReader{
 				ReadCloser: resp.Body,
-				counter: ctx.TrafficCounter,
+				counter:    ctx.TrafficCounter,
 				onClose: func() {
 					ctx.TrafficCounter.UpdateTotal()
-					ctx.Log_P("[流量统计] 上行: %d (header:%d body:%d) | 下行: %d (header:%d body:%d) | 总计: %d | %s | %s | %s",
+					ctx.parCtx.TrafficCounter.UpdateTotal()
+					ctx.Log_P("[流量统计] 本次连接上行: %d (header:%d body:%d) | 本次连接下行: %d (header:%d body:%d) | 本次连接总计: %d | 隧道总上行: %d | 隧道总下行: %d | 隧道流量总计: %d | %s | %s | %s",
 						ctx.TrafficCounter.req_sum, ctx.TrafficCounter.req_header, ctx.TrafficCounter.req_body,
 						ctx.TrafficCounter.resp_sum, ctx.TrafficCounter.resp_header, ctx.TrafficCounter.resp_body,
-						ctx.TrafficCounter.total,
-						ctx.Req.Method, ctx.Req.URL.String(), resp.Status)
+						ctx.TrafficCounter.total, ctx.parCtx.TrafficCounter.req_sum, ctx.parCtx.TrafficCounter.resp_sum,
+						ctx.parCtx.TrafficCounter.total, ctx.Req.Method, ctx.Req.URL.String(), resp.Status)
 				},
 			},
 		}
@@ -73,7 +77,6 @@ func AddTrafficMonitor(proxy *CoreHttpServer) {
 		return resp
 	})
 }
-
 
 func PrintReqHeader(proxy *CoreHttpServer) {
 	proxy.HookOnReq().DoFunc(func(req *http.Request, ctx *Pcontext) (*http.Request, *http.Response) {
@@ -102,49 +105,45 @@ func PrintRespHeader(proxy *CoreHttpServer) {
 }
 
 var httpDomains = map[string]bool{
-    "example.com": true,
+	"example.com": true,
 }
+
 func StatusChange(proxy *CoreHttpServer) {
 	proxy.HookOnReq().DoConnectFunc(func(host string, ctx *Pcontext) (*ConnectAction, string) {
 		hostname := host
 		if colonIdx := strings.LastIndex(host, ":"); colonIdx != -1 {
 			hostname = host[:colonIdx]
 		}
-		
+
 		// 1. 域名白名单判断
 		if httpDomains[hostname] {
 			return HTTPMitmConnect, host
 		}
-		
+
 		// 2. 端口判断
 		if strings.HasSuffix(host, ":80") {
 			return HTTPMitmConnect, host
 		}
-		
+
 		// 3. 默认情况
 		return OkConnect, host
 	})
 }
 
 func HttpsMitmMode(proxy *CoreHttpServer) {
-	proxy.HookOnReq().DoConnectFunc(func(host string, ctx *Pcontext) (*ConnectAction, string){
+	proxy.HookOnReq().DoConnectFunc(func(host string, ctx *Pcontext) (*ConnectAction, string) {
 		return MitmConnect, host
 	})
 }
 
 func HttpMitmMode(proxy *CoreHttpServer) {
-	proxy.HookOnReq().DoConnectFunc(func(host string, ctx *Pcontext) (*ConnectAction, string){
+	proxy.HookOnReq().DoConnectFunc(func(host string, ctx *Pcontext) (*ConnectAction, string) {
 		return HTTPMitmConnect, host
 	})
 }
 
 func TunnelMode(proxy *CoreHttpServer) {
-	proxy.HookOnReq().DoConnectFunc(func(host string, ctx *Pcontext) (*ConnectAction, string){
+	proxy.HookOnReq().DoConnectFunc(func(host string, ctx *Pcontext) (*ConnectAction, string) {
 		return OkConnect, host
 	})
 }
- 
-
-
-
-

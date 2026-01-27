@@ -263,13 +263,14 @@ func (proxy *CoreHttpServer) MyHttpsHandle(w http.ResponseWriter, r *http.Reques
 			Req:            r,
 			tunnelTrafficClient: proxyClientTCP,
 			tunnelTrafficClientNoClosable: proxyClientTCPNo,
-			Session: topctx.Session,
+			Session:  atomic.AddInt64(&proxy.sess, 1),
 		}
 
 		// 注册连接（隧道模式作为整体长连接）
-		proxy.Connections.Store(topctx.Session, &ConnectionInfo{
+		proxy.Connections.Store(Counter_Ctxt.Session, &ConnectionInfo{
 			Session:     topctx.Session,
 			Host:        host,
+			ParentSess:  tunnelSession,
 			Method:      "TUNNEL",
 			URL:         host,
 			RemoteAddr:  r.RemoteAddr,
@@ -281,7 +282,7 @@ func (proxy *CoreHttpServer) MyHttpsHandle(w http.ResponseWriter, r *http.Reques
 		})
 		
 		// 使用闭包(捕获了外部变量的匿名函数)捕获 Counter_Ctxt，访问其流量数据
-		proxyClientTCP.onUpdate = func() {
+		proxyClientTCP.onClose = func() {
 			Counter_Ctxt.Log_P("[流量统计] 上行: %d | 下行: %d | 总计: %d ",
 				Counter_Ctxt.tunnelTrafficClient.nread,
 				Counter_Ctxt.tunnelTrafficClient.nwrite,
@@ -365,6 +366,7 @@ func (proxy *CoreHttpServer) MyHttpsHandle(w http.ResponseWriter, r *http.Reques
 				ctxt := &Pcontext{
 					core_proxy:     proxy,
 					Req:            req,
+					parCtx: 		topctx,
 					TrafficCounter: &TrafficCounter{}, // 创建独立计数器
 					Session:        atomic.AddInt64(&proxy.sess, 1),
 				}
@@ -379,6 +381,8 @@ func (proxy *CoreHttpServer) MyHttpsHandle(w http.ResponseWriter, r *http.Reques
 					RemoteAddr:  r.RemoteAddr,
 					Protocol:    "HTTP-MITM",
 					StartTime:   time.Now(),
+					PuploadRef:  &ctxt.parCtx.TrafficCounter.req_sum,
+					PdownloadRef: &ctxt.parCtx.TrafficCounter.resp_sum,
 					UploadRef:   &ctxt.TrafficCounter.req_sum,
 					DownloadRef: &ctxt.TrafficCounter.resp_sum,
 					OnClose:     func() { finishRequest() },
@@ -508,6 +512,7 @@ func (proxy *CoreHttpServer) MyHttpsHandle(w http.ResponseWriter, r *http.Reques
 			// for维持隧道，循环读取client
 			for !reqTlsReader.IsEOF() {
 				// 获得格式化或非格式化请求头(由PreventParseHeader决定)
+				// req已解密
 				req, err := reqTlsReader.ReadRequest()
 
 				ctxt := &Pcontext{
@@ -547,6 +552,8 @@ func (proxy *CoreHttpServer) MyHttpsHandle(w http.ResponseWriter, r *http.Reques
 						RemoteAddr:  r.RemoteAddr,
 						Protocol:    "HTTPS-MITM",
 						StartTime:   time.Now(),
+						PuploadRef:  &ctxt.parCtx.TrafficCounter.req_sum,
+						PdownloadRef: &ctxt.parCtx.TrafficCounter.resp_sum,
 						UploadRef:   &ctxt.TrafficCounter.req_sum,
 						DownloadRef: &ctxt.TrafficCounter.resp_sum,
 						OnClose:     func() { finishRequest() },

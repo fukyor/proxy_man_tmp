@@ -10,7 +10,7 @@ type tunnelTrafficClient struct {
 	halfClosable
 	nread int64
 	nwrite int64
-	onUpdate func()
+	onClose func()
 }
 
 func newTunnelTrafficClient(conn net.Conn) (*tunnelTrafficClient, bool) {
@@ -40,8 +40,8 @@ func (w *tunnelTrafficClient) Write(p []byte) (n int, err error) {
 }
 
 func (c *tunnelTrafficClient) Close() error {
-	c.onUpdate()
-	c.onUpdate = nil
+	c.onClose()
+	c.onClose = nil
 	return c.halfClosable.Close()
 }
 

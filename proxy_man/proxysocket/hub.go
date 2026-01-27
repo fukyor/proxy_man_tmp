@@ -2,7 +2,6 @@ package proxysocket
 
 import (
 	"encoding/json"
-	"sync/atomic"
 	"time"
 
 	"github.com/gorilla/websocket"
