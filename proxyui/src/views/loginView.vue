@@ -3,7 +3,7 @@ import { ref, watch } from 'vue'
 import { useRouter } from 'vue-router'
 import { useWebSocketStore } from '@/stores/websocket'
 
-const apiUrl = ref('http://127.0.0.1:8000')
+const apiUrl = ref('http://127.0.0.1:8080')
 const secret = ref('123')
 const label = ref('')
 const servers = ref([])

@@ -2,6 +2,7 @@ import { createRouter, createWebHistory } from 'vue-router'
 import LoginView from '../views/loginView.vue'
 import DashboardView from '../views/dashboard.vue'
 import Overview from '../views/Overview.vue'
+import Connections from '../views/Connections.vue'
 import Logs from '../views/Logs.vue'
 
 const router = createRouter({
@@ -24,6 +25,11 @@ const router = createRouter({
           path: 'overview',
           name: 'overview',
           component: Overview,
+        },
+        {
+          path: 'connections',
+          name: 'connections',
+          component: Connections,
         },
         {
           path: 'logs',

@@ -7,7 +7,6 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"log"
 	"net"
 	"net/http"
 	"net/http/httputil"
@@ -195,6 +194,20 @@ func (proxy *CoreHttpServer) MyHttpsHandle(w http.ResponseWriter, r *http.Reques
 		Session:        atomic.AddInt64(&proxy.sess, 1),
 	}
 
+	// 创建顶层隧道连接记录
+	tunnelSession := ctxt.Session
+	proxy.Connections.Store(tunnelSession, &ConnectionInfo{
+		Session:     tunnelSession,
+		ParentSess:  0,
+		Host:        r.URL.Host,
+		Method:      "TCP",
+		URL:         r.URL.Host,
+		RemoteAddr:  r.RemoteAddr,
+		Protocol:    "TUNNEL",
+		StartTime:   time.Now(),
+		// 注意：MITM 模式下隧道流量由前端聚合子请求计算，此处不设置 UploadRef/DownloadRef
+	})
+
 	// 创建hijack
 	hijk, ok := w.(http.Hijacker)
 	if !ok {
@@ -316,6 +329,8 @@ func (proxy *CoreHttpServer) MyHttpsHandle(w http.ResponseWriter, r *http.Reques
 		_, _ = connFromClinet.Write([]byte("HTTP/1.0 200 OK\r\n\r\n"))
 		ctxt.Log_P("HTTP Tunnel established, http MITM")
 
+		defer proxy.Connections.Delete(tunnelSession) // 清理隧道记录
+
 		var connRemoteSite net.Conn
 		var remote_res *bufio.Reader
 		// 很关键，不要依赖自动关闭，一定要手动关闭
@@ -356,14 +371,15 @@ func (proxy *CoreHttpServer) MyHttpsHandle(w http.ResponseWriter, r *http.Reques
 				// 注册连接
 				proxy.Connections.Store(ctxt.Session, &ConnectionInfo{
 					Session:     ctxt.Session,
+					ParentSess:  tunnelSession, // 指向顶层隧道
 					Host:        r.Host,
 					Method:      req.Method,
 					URL:         req.URL.String(),
 					RemoteAddr:  r.RemoteAddr,
 					Protocol:    "HTTP-MITM",
 					StartTime:   time.Now(),
-					UploadRef:   &ctxt.TrafficCounter.req_body,
-					DownloadRef: &ctxt.TrafficCounter.resp_body,
+					UploadRef:   &ctxt.TrafficCounter.req_sum,
+					DownloadRef: &ctxt.TrafficCounter.resp_sum,
 					OnClose:     func() { finishRequest() },
 				})
 				defer proxy.Connections.Delete(ctxt.Session) // 在请求完成后注销
@@ -477,6 +493,8 @@ func (proxy *CoreHttpServer) MyHttpsHandle(w http.ResponseWriter, r *http.Reques
 			}
 		}
 		go func() {
+			defer proxy.Connections.Delete(tunnelSession) // 清理隧道记录
+
 			tlsConn := tls.Server(connFromClinet, tlsConfig)
 			defer tlsConn.Close()
 			// 完成和client的握手
@@ -521,14 +539,15 @@ func (proxy *CoreHttpServer) MyHttpsHandle(w http.ResponseWriter, r *http.Reques
 					// 注册连接
 					proxy.Connections.Store(ctxt.Session, &ConnectionInfo{
 						Session:     ctxt.Session,
+						ParentSess:  tunnelSession, // 指向顶层隧道
 						Host:        r.Host,
 						Method:      req.Method,
 						URL:         req.URL.String(),
 						RemoteAddr:  r.RemoteAddr,
 						Protocol:    "HTTPS-MITM",
 						StartTime:   time.Now(),
-						UploadRef:   &ctxt.TrafficCounter.req_body,
-						DownloadRef: &ctxt.TrafficCounter.resp_body,
+						UploadRef:   &ctxt.TrafficCounter.req_sum,
+						DownloadRef: &ctxt.TrafficCounter.resp_sum,
 						OnClose:     func() { finishRequest() },
 					})
 					defer proxy.Connections.Delete(ctxt.Session) // 在请求完成后注销
@@ -537,7 +556,6 @@ func (proxy *CoreHttpServer) MyHttpsHandle(w http.ResponseWriter, r *http.Reques
 
 					// https已经解析成功，我们可以查看请求
 					req, resp := proxy.filterRequest(req, ctxt)
-					log.Printf("google请求头已解析")
 					if resp == nil {
 						if err != nil {
 							if req.URL != nil {

@@ -61,7 +61,7 @@ func AddTrafficMonitor(proxy *CoreHttpServer) {
 				ctx.TrafficCounter.UpdateTotal()
 				ctx.Log_P("[流量统计] 上行: %d (header:%d body:%d) | 下行: %d (header:%d body:%d) | 总计: %d | %s | %s | %s",
 					ctx.TrafficCounter.req_sum, ctx.TrafficCounter.req_header, ctx.TrafficCounter.req_body,
-					ctx.TrafficCounter.resp_sum, ctx.TrafficCounter.resp_header, ctx.TrafficCounter.req_body,
+					ctx.TrafficCounter.resp_sum, ctx.TrafficCounter.resp_header, ctx.TrafficCounter.resp_body,
 					ctx.TrafficCounter.total,
 					ctx.Req.Method, ctx.Req.URL.String(), resp.Status)
 			},

@@ -98,11 +98,13 @@ func (h *WebSocketHub) StartConnectionPusher() {
 				info := value.(*mproxy.ConnectionInfo)
 				connData := map[string]any{
 					"id":       info.Session,
+					"parentId": info.ParentSess,
 					"host":     info.Host,
 					"method":   info.Method,
 					"url":      info.URL,
 					"remote":   info.RemoteAddr,
 					"protocol": info.Protocol,
+					"startTime": info.StartTime,
 				}
 
 				// 读取实时流量（如果有引用）

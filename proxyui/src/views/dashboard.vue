@@ -45,6 +45,30 @@ import { RouterLink, RouterView } from 'vue-router'
           <span>概览</span>
         </RouterLink>
 
+        <RouterLink to="/dashboard/connections" class="nav-item" active-class="active">
+          <!-- Icon for Connections -->
+          <svg
+            width="18"
+            height="18"
+            viewBox="0 0 24 24"
+            fill="none"
+            stroke="currentColor"
+            stroke-width="2"
+            stroke-linecap="round"
+            stroke-linejoin="round"
+          >
+            <circle cx="6" cy="6" r="3"></circle>
+            <circle cx="18" cy="6" r="3"></circle>
+            <circle cx="6" cy="18" r="3"></circle>
+            <circle cx="18" cy="18" r="3"></circle>
+            <line x1="9" y1="6" x2="15" y2="6"></line>
+            <line x1="6" y1="9" x2="6" y2="15"></line>
+            <line x1="18" y1="9" x2="18" y2="15"></line>
+            <line x1="9" y1="18" x2="15" y2="18"></line>
+          </svg>
+          <span>详细连接</span>
+        </RouterLink>
+
         <RouterLink to="/dashboard/logs" class="nav-item" active-class="active">
           <!-- Icon for Logs -->
           <svg

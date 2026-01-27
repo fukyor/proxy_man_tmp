@@ -13,7 +13,7 @@ var (
 )
 
 type TrafficCounter struct {
-	resp_header int64	// remote->proxy的头部总大小
+	resp_header int64	// remote->client的头部总大小
 	resp_body int64		// remote->client的body总大小
 	req_header int64	// client->proxy头部总大小
 	req_body int64		// client->proxy body总大小
