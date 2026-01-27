@@ -187,15 +187,16 @@ func copyOrWarn(ctx *Pcontext, dst io.Writer, src io.Reader) error {
 
 func (proxy *CoreHttpServer) MyHttpsHandle(w http.ResponseWriter, r *http.Request) {
 	// 统计connect的session号，是最基础的tcp连接，所有数据都通过该隧道
-	ctxt := &Pcontext{
+	topctxt := &Pcontext{
 		core_proxy:     proxy,
 		Req:            r,
 		TrafficCounter: &TrafficCounter{},
 		Session:        atomic.AddInt64(&proxy.sess, 1),
 	}
 
+	var tunnelUp, tunnelDown *int64
 	// 创建顶层隧道连接记录
-	tunnelSession := ctxt.Session
+	tunnelSession := topctxt.Session
 	proxy.Connections.Store(tunnelSession, &ConnectionInfo{
 		Session:     tunnelSession,
 		ParentSess:  0,
@@ -204,8 +205,9 @@ func (proxy *CoreHttpServer) MyHttpsHandle(w http.ResponseWriter, r *http.Reques
 		URL:         r.URL.Host,
 		RemoteAddr:  r.RemoteAddr,
 		Protocol:    "TUNNEL",
-		StartTime:   time.Now(),
-		// 注意：MITM 模式下隧道流量由前端聚合子请求计算，此处不设置 UploadRef/DownloadRef
+		UploadRef:   tunnelUp,
+		DownloadRef: tunnelDown,
+		StartTime:   time.Now(),	
 	})
 
 	// 创建hijack
@@ -219,17 +221,17 @@ func (proxy *CoreHttpServer) MyHttpsHandle(w http.ResponseWriter, r *http.Reques
 	if err != nil {
 		panic("hijack connection fail" + err.Error())
 	}
-	ctxt.Log_P("处理器数量Have %d CONNECT handlers", len(proxy.httpsHandlers))
+	topctxt.Log_P("处理器数量Have %d CONNECT handlers", len(proxy.httpsHandlers))
 
 	strategy, host := OkConnect, r.URL.Host
 
 	// 切换处理状态
 	for i, h := range proxy.httpsHandlers {
-		new_strategy, newhost := h.HandleConnect(host, ctxt)
+		new_strategy, newhost := h.HandleConnect(host, topctxt)
 		// 和resphook一样返回nil说明没有匹配上条件，如果不等于nil则匹配上了就替换新的策略
 		if new_strategy != nil {
 			strategy, host = new_strategy, newhost
-			ctxt.Log_P("Excuted %dth handler: %v %s", i, strategy, host)
+			topctxt.Log_P("Excuted %dth handler: %v %s", i, strategy, host)
 			break
 		}
 	}
@@ -239,35 +241,35 @@ func (proxy *CoreHttpServer) MyHttpsHandle(w http.ResponseWriter, r *http.Reques
 		if !Port.MatchString(host) {
 			host += ":80"
 		}
-		connRemoteSite, err := proxy.connectDial(ctxt, "tcp", host)
+		connRemoteSite, err := proxy.connectDial(topctxt, "tcp", host)
 		if err != nil {
-			ctxt.WarnP("拨号获取套接字错误Error dialing to %s: %s", host, err.Error())
-			httpError(connRemoteSite, ctxt, err) // 如果出错手动关闭连接
+			topctxt.WarnP("拨号获取套接字错误Error dialing to %s: %s", host, err.Error())
+			httpError(connRemoteSite, topctxt, err) // 如果出错手动关闭连接
 			return
 		}
-		ctxt.Log_P("Accepting CONNECT to %s", host)
+		topctxt.Log_P("Accepting CONNECT to %s", host)
 
 		_, err = connFromClinet.Write([]byte("HTTP/1.0 200 Connection established\r\n\r\n"))
 		if err != nil {
-			ctxt.WarnP("200 Connection fail established")
+			topctxt.WarnP("200 Connection fail established")
 			return
 		}
 
 		// 用client端统计上行流量和下行流量
 		proxyClientTCP, clientOK := newTunnelTrafficClient(connFromClinet)
-		connClient := newtunnelTrafficClientNoClosable(connFromClinet)
-		// 这里不需要计数请求了
+		proxyClientTCPNo := newtunnelTrafficClientNoClosable(connFromClinet)
+		
 		Counter_Ctxt := &Pcontext{
 			core_proxy:     proxy,
 			Req:            r,
 			tunnelTrafficClient: proxyClientTCP,
-			tunnelTrafficClientNoClosable: connClient,
-			Session: ctxt.Session,
+			tunnelTrafficClientNoClosable: proxyClientTCPNo,
+			Session: topctxt.Session,
 		}
 
 		// 注册连接（隧道模式作为整体长连接）
-		proxy.Connections.Store(ctxt.Session, &ConnectionInfo{
-			Session:     ctxt.Session,
+		proxy.Connections.Store(topctxt.Session, &ConnectionInfo{
+			Session:     topctxt.Session,
 			Host:        host,
 			Method:      "TUNNEL",
 			URL:         host,
@@ -278,7 +280,9 @@ func (proxy *CoreHttpServer) MyHttpsHandle(w http.ResponseWriter, r *http.Reques
 			DownloadRef: &proxyClientTCP.nwrite,  // nwrite = 写给客户端 = Download
 			OnClose:     func() { connFromClinet.Close() },
 		})
-
+		tunnelUp = &proxyClientTCP.nread
+		tunnelDown = &proxyClientTCP.nwrite
+		
 		// 使用闭包(捕获了外部变量的匿名函数)捕获 Counter_Ctxt，访问其流量数据
 		proxyClientTCP.onUpdate = func() {
 			Counter_Ctxt.Log_P("[流量统计] 上行: %d | 下行: %d | 总计: %d ",
@@ -287,7 +291,7 @@ func (proxy *CoreHttpServer) MyHttpsHandle(w http.ResponseWriter, r *http.Reques
 				Counter_Ctxt.tunnelTrafficClient.nread + Counter_Ctxt.tunnelTrafficClient.nwrite,
 				)
 			// 在连接关闭时注销
-			proxy.Connections.Delete(ctxt.Session)
+			proxy.Connections.Delete(topctxt.Session)
 		}
 
 		targetTCP, targetOK := connRemoteSite.(halfClosable)
@@ -298,8 +302,8 @@ func (proxy *CoreHttpServer) MyHttpsHandle(w http.ResponseWriter, r *http.Reques
 				wg.Add(2)
 				// io.copy的退出取决于参数接口的行为，如果参数是req.Body / resp.Body就会在读到Content-Length / Chunk结束符退出。
 				// 这里参数是net.Conn接口，net.Conn的底层行为是和tcp socket的生命周期一致，会一直保持到tcp断开
-				go copyAndClose(ctxt, targetTCP, proxyClientTCP, &wg)
-				go copyAndClose(ctxt, proxyClientTCP, targetTCP, &wg)
+				go copyAndClose(topctxt, targetTCP, proxyClientTCP, &wg)
+				go copyAndClose(topctxt, proxyClientTCP, targetTCP, &wg)
 				wg.Wait()
 				// 最后调用close保证了连接能够正常断开
 				proxyClientTCP.Close()
@@ -308,16 +312,16 @@ func (proxy *CoreHttpServer) MyHttpsHandle(w http.ResponseWriter, r *http.Reques
 		} else {
 			go func() {
 				// 使用包装后的 reader/writer 进行流量统计
-				err := copyOrWarn(ctxt, targetTCP, proxyClientTCP)
+				err := copyOrWarn(topctxt, targetTCP, proxyClientTCPNo)
 				if err != nil && proxy.ConnectionErrHandler != nil {
 					// 向客户端发送错误信息
-					proxy.ConnectionErrHandler(connFromClinet, ctxt, err)
+					proxy.ConnectionErrHandler(connFromClinet, topctxt, err)
 				}
 				_ = targetTCP.Close()
 			}()
 
 			go func() {
-				_ = copyOrWarn(ctxt, proxyClientTCP, targetTCP)
+				_ = copyOrWarn(topctxt, proxyClientTCPNo, targetTCP)
 				_ = proxyClientTCP.Close()
 			}()
 		}
@@ -327,7 +331,7 @@ func (proxy *CoreHttpServer) MyHttpsHandle(w http.ResponseWriter, r *http.Reques
 	// http隧道透传，有利于server和client的HTTP1.1连接复用。减轻proxy压力。
 	case ConnectHTTPMitm:
 		_, _ = connFromClinet.Write([]byte("HTTP/1.0 200 OK\r\n\r\n"))
-		ctxt.Log_P("HTTP Tunnel established, http MITM")
+		topctxt.Log_P("HTTP Tunnel established, http MITM")
 
 		defer proxy.Connections.Delete(tunnelSession) // 清理隧道记录
 
@@ -351,7 +355,7 @@ func (proxy *CoreHttpServer) MyHttpsHandle(w http.ResponseWriter, r *http.Reques
 			// 检查是否是正常的连接关闭错误（EOF, ErrClosed, 或 net.OpError 导致的连接关闭）
 			isConnClosed := httpMitmCheckError(err)
 			if err != nil && !isConnClosed {
-				ctxt.WarnP("http协议解析错误http parser errror: %+#v", err)
+				topctxt.WarnP("http协议解析错误http parser errror: %+#v", err)
 			}
 			if err != nil {
 				return
@@ -383,6 +387,8 @@ func (proxy *CoreHttpServer) MyHttpsHandle(w http.ResponseWriter, r *http.Reques
 					OnClose:     func() { finishRequest() },
 				})
 				defer proxy.Connections.Delete(ctxt.Session) // 在请求完成后注销
+				tunnelUp = &ctxt.TrafficCounter.req_sum
+				tunnelDown = &ctxt.TrafficCounter.resp_sum
 
 				// 模仿标准库为request绑定上下文
 				requestContext, CancelR := context.WithCancel(req.Context())
@@ -481,14 +487,14 @@ func (proxy *CoreHttpServer) MyHttpsHandle(w http.ResponseWriter, r *http.Reques
 		}
 	case ConnectMitm:
 		_, _ = connFromClinet.Write([]byte("HTTP/1.0 200 OK\r\n\r\n"))
-		ctxt.Log_P("tls中间人劫持, TLS Mitm")
+		topctxt.Log_P("tls中间人劫持, TLS Mitm")
 		tlsConfig := defaultTLSConfig
 		// 根据生成自签名伪装host证书
 		if strategy.TLSConfig != nil {
 			var err error
-			tlsConfig, err = strategy.TLSConfig(host, ctxt)
+			tlsConfig, err = strategy.TLSConfig(host, topctxt)
 			if err != nil {
-				httpError(connFromClinet, ctxt, err)
+				httpError(connFromClinet, topctxt, err)
 				return
 			}
 		}
@@ -499,7 +505,7 @@ func (proxy *CoreHttpServer) MyHttpsHandle(w http.ResponseWriter, r *http.Reques
 			defer tlsConn.Close()
 			// 完成和client的握手
 			if err := tlsConn.Handshake(); err != nil {
-				ctxt.WarnP("tls握手失败Cannot handshake client %v %v", r.Host, err)
+				topctxt.WarnP("tls握手失败Cannot handshake client %v %v", r.Host, err)
 				return
 			}
 			reqTlsReader := http1parser.NewRequestReader(proxy.PreventParseHeader, tlsConn)
@@ -513,8 +519,8 @@ func (proxy *CoreHttpServer) MyHttpsHandle(w http.ResponseWriter, r *http.Reques
 					Req:            req,
 					Session:        atomic.AddInt64(&proxy.sess, 1),
 					core_proxy:     proxy,
-					UserData:       ctxt.UserData, //如果用户在 HandleConnect 处理器中设置了 UserData 或 RoundTripper，则继承保留
-					RoundTripper:   ctxt.RoundTripper,
+					UserData:       topctxt.UserData, //如果用户在 HandleConnect 处理器中设置了 UserData 或 RoundTripper，则继承保留
+					RoundTripper:   topctxt.RoundTripper,
 					TrafficCounter: &TrafficCounter{},
 				}
 				if err != nil && !errors.Is(err, io.EOF) {
@@ -551,6 +557,8 @@ func (proxy *CoreHttpServer) MyHttpsHandle(w http.ResponseWriter, r *http.Reques
 						OnClose:     func() { finishRequest() },
 					})
 					defer proxy.Connections.Delete(ctxt.Session) // 在请求完成后注销
+					tunnelUp = &ctxt.TrafficCounter.req_sum
+					tunnelDown = &ctxt.TrafficCounter.resp_sum
 
 					ctxt.Req = req
 
@@ -686,7 +694,7 @@ func (proxy *CoreHttpServer) MyHttpsHandle(w http.ResponseWriter, r *http.Reques
 				}
 			}
 			// 正常退出，收到client EOF
-			ctxt.Log_P("Normal Exiting on EOF")
+			topctxt.Log_P("Normal Exiting on EOF")
 		}()
 	}
 }

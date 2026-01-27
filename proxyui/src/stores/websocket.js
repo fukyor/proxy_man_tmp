@@ -139,7 +139,7 @@ export const useWebSocketStore = defineStore('websocket', () => {
    * @param {Object} data - 流量数据 { up, down }
    */
   function handleTraffic(data) {
-    console.log(JSON.stringify(data, null, 2));
+   // console.log(JSON.stringify(data, null, 2));
     const item = { ...data, timestamp: Date.now() }
     trafficHistory.value.push(item)
     if (trafficHistory.value.length > MAX_HISTORY) {

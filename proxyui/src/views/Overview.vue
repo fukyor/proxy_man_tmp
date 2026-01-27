@@ -43,7 +43,7 @@
             <tr v-if="connections.length === 0">
               <td colspan="7" class="no-data">暂无活动连接</td>
             </tr>
-            <tr v-for="conn in connections" :key="conn.id" @click="handleRowClick(conn)" class="clickable-row">
+            <tr v-for="conn in connections" :key="conn.id" class="clickable-row">
               <td>{{ conn.id }}</td>
               <td>{{ conn.method }}</td>
               <td>{{ conn.host }}</td>
@@ -56,84 +56,8 @@
         </table>
       </div>
     </div>
-
-    <!-- 侧边栏遮罩层 -->
-    <div v-if="sidebarVisible" class="sidebar-overlay" @click.self="closeSidebar">
-      <div class="sidebar">
-        <!-- 侧边栏头部 -->
-        <div class="sidebar-header">
-          <h3>隧道连接详情</h3>
-          <button @click="closeSidebar" class="btn-close">&times;</button>
-        </div>
-
-        <!-- 侧边栏内容 -->
-        <div class="sidebar-content">
-          <!-- 隧道基本信息 -->
-          <div class="tunnel-info">
-            <div class="info-row">
-              <span class="label">ID:</span>
-              <span class="value">{{ selectedTunnel?.id }}</span>
-            </div>
-            <div class="info-row">
-              <span class="label">Host:</span>
-              <span class="value">{{ selectedTunnel?.host }}</span>
-            </div>
-            <div class="info-row">
-              <span class="label">协议:</span>
-              <span class="value">{{ selectedTunnel?.protocol }}</span>
-            </div>
-            <div class="info-row">
-              <span class="label">远程地址:</span>
-              <span class="value">{{ selectedTunnel?.remote }}</span>
-            </div>
-          </div>
-
-          <!-- 流量统计 -->
-          <div class="traffic-summary">
-            <h4>流量统计</h4>
-            <div class="traffic-row">
-              <span class="label">总上传:</span>
-              <span class="value">{{ formatBytes(sidebarTraffic.up) }}</span>
-            </div>
-            <div class="traffic-row">
-              <span class="label">总下载:</span>
-              <span class="value">{{ formatBytes(sidebarTraffic.down) }}</span>
-            </div>
-          </div>
-
-          <!-- 子请求列表 -->
-          <div class="children-list">
-            <h4>子请求列表 ({{ sidebarChildren.length }})</h4>
-            <div v-if="sidebarChildren.length === 0" class="no-children">
-              暂无子请求
-            </div>
-            <div v-else class="children-table-container">
-              <table class="children-table">
-                <thead>
-                  <tr>
-                    <th>ID</th>
-                    <th>方法</th>
-                    <th>URL</th>
-                    <th>上传</th>
-                    <th>下载</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  <tr v-for="child in sidebarChildren" :key="child.id">
-                    <td>{{ child.id }}</td>
-                    <td>{{ child.method }}</td>
-                    <td class="url-cell">{{ child.url }}</td>
-                    <td>{{ formatBytes(child.up || 0) }}</td>
-                    <td>{{ formatBytes(child.down || 0) }}</td>
-                  </tr>
-                </tbody>
-              </table>
-            </div>
-          </div>
-        </div>
-      </div>
-    </div>
   </div>
+
 
 </template>
 
@@ -151,32 +75,11 @@ const wsStore = useWebSocketStore()
 const chartCanvas = ref(null)
 const currentUpload = ref(0)
 const currentDownload = ref(0)
-const connections = ref([])
-const allConnections = ref([]) // 存储所有连接（包括隧道和子请求）
-const sidebarVisible = ref(false) // 侧边栏显示状态
-const selectedTunnel = ref(null) // 选中的隧道连接
 
 let chart = null
 let unsubscribeTraffic = null
 let unsubscribeConnections = null
 
-// 计算属性：侧边栏中显示的子请求列表
-const sidebarChildren = computed(() => {
-  if (!selectedTunnel.value) return []
-  return allConnections.value.filter(conn => conn.parentId === selectedTunnel.value.id)
-})
-
-// 计算属性：聚合子请求流量计算隧道总流量
-const sidebarTraffic = computed(() => {
-  const children = sidebarChildren.value
-  if (children.length === 0) return { up: 0, down: 0 }
-
-  return children.reduce((acc, conn) => {
-    acc.up += (conn.up || 0)
-    acc.down += (conn.down || 0)
-    return acc
-  }, { up: 0, down: 0 })
-})
 
 // 初始化图表
 function initChart() {
@@ -269,17 +172,6 @@ function updateConnections(data) {
   connections.value = data.filter(conn => conn.parentId === 0)
 }
 
-// 处理行点击事件
-function handleRowClick(conn) {
-  selectedTunnel.value = conn
-  sidebarVisible.value = true
-}
-
-// 关闭侧边栏
-function closeSidebar() {
-  sidebarVisible.value = false
-  selectedTunnel.value = null
-}
 
 // 关闭所有连接
 function handleCloseAll() {
@@ -295,19 +187,6 @@ function formatBytes(bytes) {
   return (bytes / Math.pow(k, i)).toFixed(2) + ' ' + sizes[i]
 }
 
-// 格式化时间
-function formatTime(time) {
-  if (!time) return ''
-  const date = new Date(time)
-  return date.toLocaleString('zh-CN', {
-    year: 'numeric',
-    month: '2-digit',
-    day: '2-digit',
-    hour: '2-digit',
-    minute: '2-digit',
-    second: '2-digit'
-  })
-}
 
 // 生命周期钩子
 onMounted(() => {
@@ -483,34 +362,6 @@ h2 {
   justify-content: flex-end;
 }
 
-/* 侧边栏容器 */
-.sidebar {
-  width: 600px;
-  max-width: 90vw;
-  background: #2a2a2a;
-  height: 100vh;
-  overflow-y: auto;
-  box-shadow: -2px 0 8px rgba(0, 0, 0, 0.3);
-}
-
-/* 侧边栏头部 */
-.sidebar-header {
-  display: flex;
-  justify-content: space-between;
-  align-items: center;
-  padding: 20px;
-  background: #1a1a1a;
-  border-bottom: 2px solid #cba376;
-  position: sticky;
-  top: 0;
-  z-index: 1;
-}
-
-.sidebar-header h3 {
-  color: #cba376;
-  margin: 0;
-  font-size: 1.3em;
-}
 
 .btn-close {
   background: transparent;
@@ -532,10 +383,6 @@ h2 {
   color: #fff;
 }
 
-/* 侧边栏内容 */
-.sidebar-content {
-  padding: 20px;
-}
 
 /* 隧道信息区 */
 .tunnel-info {
@@ -599,62 +446,5 @@ h2 {
 .traffic-row .value {
   color: #cba376;
   font-weight: 600;
-}
-
-/* 子请求列表区 */
-.children-list {
-  background: #1a1a1a;
-  border-radius: 8px;
-  padding: 15px;
-}
-
-.children-list h4 {
-  color: #cba376;
-  margin: 0 0 15px 0;
-  font-size: 1.1em;
-}
-
-.no-children {
-  text-align: center;
-  color: #999;
-  padding: 30px;
-  font-size: 0.9em;
-}
-
-.children-table-container {
-  overflow-x: auto;
-  max-height: 400px;
-  overflow-y: auto;
-}
-
-.children-table {
-  width: 100%;
-  border-collapse: collapse;
-  color: #cba376;
-  font-size: 0.9em;
-}
-
-.children-table th {
-  background: #2a2a2a;
-  padding: 10px;
-  text-align: left;
-  font-weight: 600;
-  border-bottom: 1px solid #cba376;
-  position: sticky;
-  top: 0;
-  z-index: 1;
-}
-
-.children-table td {
-  padding: 8px 10px;
-  border-bottom: 1px solid #3a3a3a;
-}
-
-.children-table tr:hover {
-  background: #333;
-}
-
-.children-table .url-cell {
-  max-width: 200px;
 }
 </style>

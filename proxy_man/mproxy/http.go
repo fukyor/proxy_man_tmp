@@ -13,6 +13,11 @@ func (proxy *CoreHttpServer) MyHttpHandle(w http.ResponseWriter, r *http.Request
 	var err error 
 	var oriBody io.ReadCloser
 
+	if !r.URL.IsAbs(){
+		proxy.DirectHandler.ServeHTTP(w, r)
+		return
+	}
+
 	ctx, cancel := context.WithCancel(r.Context())
 	r = r.WithContext(ctx)
 	defer cancel() // 确保函数退出时清理 Context，避免内存泄露，context本质也是通道占用内存
@@ -37,11 +42,6 @@ func (proxy *CoreHttpServer) MyHttpHandle(w http.ResponseWriter, r *http.Request
 		DownloadRef: &ctxt.TrafficCounter.resp_body,
 		OnClose:     func() { cancel() },
 	})
-
-	if !r.URL.IsAbs(){
-		proxy.DirectHandler.ServeHTTP(w, r)
-		return
-	}
 
 	r, resp := proxy.filterRequest(r, ctxt)
 
