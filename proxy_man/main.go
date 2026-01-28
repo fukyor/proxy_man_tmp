@@ -19,13 +19,13 @@ func main() {
 	proxy.AllowHTTP2 = false
 	proxy.PreventParseHeader = false
 	proxy.KeepDestHeaders = false
-	proxy.ConnectMaintain = false
+	proxy.ConnectMaintain = true
 
 	// 使用 LogCollector 包装原有 Logger
 	proxy.Logger = mproxy.NewLogCollector(proxy.Logger)
 
-	mproxy.PrintReqHeader(proxy)
-	mproxy.PrintRespHeader(proxy)
+	// mproxy.PrintReqHeader(proxy)
+	// mproxy.PrintRespHeader(proxy)
 	mproxy.AddTrafficMonitor(proxy)
 	//mproxy.StatusChange(proxy)
 	//mproxy.HttpMitmMode(proxy)
