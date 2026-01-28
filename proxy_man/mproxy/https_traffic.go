@@ -26,6 +26,7 @@ type TrafficCounter struct {
 type reqBodyReader struct {
 	io.ReadCloser       // 嵌入原始 req.Body(包含字段有header,body,socket)
 	counter *TrafficCounter // 指向全局计数器
+	Pcounter *TrafficCounter
 	onClose func()  // 关闭时的回调函数，用于打印/记录日志
 }
 
@@ -34,6 +35,9 @@ func (r *reqBodyReader) Read(p []byte) (n int, err error) {
 	r.counter.req_sum += int64(n)
 	r.counter.req_body += int64(n)
 	GlobalTrafficUp.Add(int64(n)) // 实时累加全局上行
+	if r.Pcounter != nil {
+		r.Pcounter.req_sum += int64(n)
+	}
 	return n, err
 }
 
@@ -46,6 +50,7 @@ func (r *reqBodyReader) Close() error {
 type respBodyReader struct {
 	io.ReadCloser       // 嵌入原始 resp.Body(包含字段有header,body,socket)
 	counter *TrafficCounter // 指向全局计数器
+	Pcounter *TrafficCounter
 	onClose func()  // 关闭时的回调函数，用于打印/记录日志
 }
 
@@ -54,6 +59,9 @@ func (r *respBodyReader) Read(p []byte) (n int, err error) {
 	r.counter.resp_sum += int64(n)
 	r.counter.resp_body += int64(n) // 记录响应体大小
 	GlobalTrafficDown.Add(int64(n)) // 实时累加全局下行
+	if r.Pcounter != nil {
+		r.Pcounter.resp_sum += int64(n)
+	}
 	return n, err
 }
 

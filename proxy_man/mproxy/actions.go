@@ -17,20 +17,19 @@ func AddTrafficMonitor(proxy *CoreHttpServer) {
 		// 记录请求头大小
 		ctx.TrafficCounter.req_header = GetHeaderSize(req, ctx)
 		ctx.TrafficCounter.req_sum = ctx.TrafficCounter.req_header
-		ctx.parCtx.TrafficCounter.req_sum = ctx.TrafficCounter.req_header
+		ctx.parCtx.TrafficCounter.req_sum += ctx.TrafficCounter.req_header
 		GlobalTrafficUp.Add(ctx.TrafficCounter.req_header)
 		// 如果有请求体，包装它
 		if req.Body != nil {
 			// roundripe自动调用req.Body.read读取body
 			// roundripe从req的map中读取header
-			req.Body = &TopTrafficReqBodyReader{
-				reqBodyReader: reqBodyReader{
+			req.Body = &reqBodyReader{
 					ReadCloser: req.Body,
 					counter:    ctx.TrafficCounter,
+					Pcounter:	ctx.parCtx.TrafficCounter,
 					onClose:    nil,
-				},
+				}
 			}
-		}
 		return req, nil
 	})
 
@@ -58,10 +57,10 @@ func AddTrafficMonitor(proxy *CoreHttpServer) {
 		}
 
 		// 包装响应体
-		resp.Body = &TopTrafficRespBodyReader{
-			respBodyReader: respBodyReader{
+		resp.Body = &respBodyReader{
 				ReadCloser: resp.Body,
 				counter:    ctx.TrafficCounter,
+				Pcounter:   ctx.parCtx.TrafficCounter,
 				onClose: func() {
 					ctx.TrafficCounter.UpdateTotal()
 					ctx.parCtx.TrafficCounter.UpdateTotal()
@@ -71,9 +70,7 @@ func AddTrafficMonitor(proxy *CoreHttpServer) {
 						ctx.TrafficCounter.total, ctx.parCtx.TrafficCounter.req_sum, ctx.parCtx.TrafficCounter.resp_sum,
 						ctx.parCtx.TrafficCounter.total, ctx.Req.Method, ctx.Req.URL.String(), resp.Status)
 				},
-			},
-		}
-
+			}
 		return resp
 	})
 }

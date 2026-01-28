@@ -2,7 +2,6 @@ package mproxy
 
 import (
 	"net"
-	"sync/atomic"
 )
 
 // tunnelTrafficReader 统计读取的流量
@@ -84,37 +83,37 @@ func (c *tunnelTrafficClientNoClosable) Close() error {
 
 
 
-type TopTrafficReqBodyReader struct {
-	reqBodyReader
-	nread int64
-}
+// type TopTrafficReqBodyReader struct {
+// 	reqBodyReader
+// 	nread int64
+// }
 
-func (t *TopTrafficReqBodyReader) Read(p []byte) (n int, err error) {
-	n, err = t.reqBodyReader.Read(p)
-	atomic.AddInt64(&t.nread, int64(n))
-	return
-}
+// func (t *TopTrafficReqBodyReader) Read(p []byte) (n int, err error) {
+// 	n, err = t.reqBodyReader.Read(p)
+// 	atomic.AddInt64(&t.nread, int64(n))
+// 	return
+// }
 
-func (r *TopTrafficReqBodyReader) Close() error {
-	return r.reqBodyReader.Close()
-}
+// func (r *TopTrafficReqBodyReader) Close() error {
+// 	return r.reqBodyReader.Close()
+// }
 
 
 
-type TopTrafficRespBodyReader struct {
-	respBodyReader
-	nread int64
-}
+// type TopTrafficRespBodyReader struct {
+// 	respBodyReader
+// 	nread int64
+// }
 
-func (t *TopTrafficRespBodyReader) Read(p []byte) (n int, err error) {
-	n, err = t.respBodyReader.Read(p)
-	atomic.AddInt64(&t.nread, int64(n))
-	return
-}
+// func (t *TopTrafficRespBodyReader) Read(p []byte) (n int, err error) {
+// 	n, err = t.respBodyReader.Read(p)
+// 	atomic.AddInt64(&t.nread, int64(n))
+// 	return
+// }
 
-func (r *TopTrafficRespBodyReader) Close() error {
-	return r.respBodyReader.Close()
-}
+// func (r *TopTrafficRespBodyReader) Close() error {
+// 	return r.respBodyReader.Close()
+// }
 
 
 

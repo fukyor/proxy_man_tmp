@@ -263,16 +263,17 @@ func (proxy *CoreHttpServer) MyHttpsHandle(w http.ResponseWriter, r *http.Reques
 			Req:            r,
 			tunnelTrafficClient: proxyClientTCP,
 			tunnelTrafficClientNoClosable: proxyClientTCPNo,
-			Session:  atomic.AddInt64(&proxy.sess, 1),
+			Session:  topctx.Session,
 		}
 
+		url_, err := url.Parse("http:" + r.URL.String())
 		// 注册连接（隧道模式作为整体长连接）
 		proxy.Connections.Store(Counter_Ctxt.Session, &ConnectionInfo{
 			Session:     topctx.Session,
 			Host:        host,
 			ParentSess:  tunnelSession,
 			Method:      "TUNNEL",
-			URL:         host,
+			URL:         url_.String(),
 			RemoteAddr:  r.RemoteAddr,
 			Protocol:    "HTTPS-Tunnel",
 			StartTime:   time.Now(),
@@ -290,6 +291,7 @@ func (proxy *CoreHttpServer) MyHttpsHandle(w http.ResponseWriter, r *http.Reques
 				)
 			// 在连接关闭时注销
 			proxy.Connections.Delete(topctx.Session)
+			proxy.Connections.Delete(Counter_Ctxt.Session)
 		}
 
 		targetTCP, targetOK := connRemoteSite.(halfClosable)
@@ -434,7 +436,10 @@ func (proxy *CoreHttpServer) MyHttpsHandle(w http.ResponseWriter, r *http.Reques
 				resp = proxy.filterResponse(resp, ctxt)
 				defer resp.Body.Close()
 
-				resp.Header.Set("Connection", "close")
+				isWebsocket := isWebSocketHandshake(resp.Header)
+				if !isWebsocket {
+					resp.Header.Set("Connection", "close")
+				}
 				// 使用 httputil.DumpResponse 获取完整头部（包含状态行）
 				headerBytes, err := httputil.DumpResponse(resp, false)
 				if err != nil {
@@ -519,6 +524,7 @@ func (proxy *CoreHttpServer) MyHttpsHandle(w http.ResponseWriter, r *http.Reques
 					Req:            req,
 					Session:        atomic.AddInt64(&proxy.sess, 1),
 					core_proxy:     proxy,
+					parCtx: 		topctx,	
 					UserData:       topctx.UserData, //如果用户在 HandleConnect 处理器中设置了 UserData 或 RoundTripper，则继承保留
 					RoundTripper:   topctx.RoundTripper,
 					TrafficCounter: &TrafficCounter{},
@@ -610,8 +616,8 @@ func (proxy *CoreHttpServer) MyHttpsHandle(w http.ResponseWriter, r *http.Reques
 					}
 					// Force connection close otherwise chrome will keep CONNECT tunnel open forever
 					// 之所以需要主动发送close的原因是proxy到target的隧道关闭后，这里proxy是不会通知client的。两个方向
-					// 完全解耦，导致proxy完全依赖于client的EOF关闭tcp，所以为了避免client一直不关闭tcp，proxy的方案就
-					// 是主动告诉客户端 connection：close
+					// 完全解耦，导致proxy完全依赖于client的EOF关闭tcp，所以为了避免client一直不关闭tcp，导致proxy资源浪费
+					// proxy的方案就是主动告诉客户端 connection：close
 					if !isWebsocket {
 						resp.Header.Set("Connection", "close")
 					}
