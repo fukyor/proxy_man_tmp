@@ -14,6 +14,14 @@
           <span class="label">下载速率:</span>
           <span class="value">{{ formatBytes(currentDownload) }}/s</span>
         </div>
+        <div class="stat-item">
+          <span class="label">总上传:</span>
+          <span class="value">{{ formatBytes(totalUpload) }}</span>
+        </div>
+        <div class="stat-item">
+          <span class="label">总下载:</span>
+          <span class="value">{{ formatBytes(totalDownload) }}</span>
+        </div>
       </div>
       <div class="chart-container">
         <canvas ref="chartCanvas"></canvas>
@@ -41,7 +49,7 @@
           </thead>
           <tbody>
             <tr v-if="connections.length === 0">
-              <td colspan="7" class="no-data">暂无活动连接</td>
+              <td colspan="7" class="no-data">暂无活跃连接</td>
             </tr>
             <tr v-for="conn in connections" :key="conn.id" class="clickable-row">
               <td>{{ conn.id }}</td>
@@ -62,7 +70,7 @@
 </template>
 
 <script setup>
-import { ref, onMounted, onUnmounted } from 'vue'
+import { ref, computed, onMounted, onUnmounted } from 'vue'
 import { useWebSocketStore } from '@/stores/websocket'
 import { Chart, registerables } from 'chart.js'
 
@@ -76,10 +84,21 @@ const chartCanvas = ref(null)
 const currentUpload = ref(0)
 const currentDownload = ref(0)
 const connections = ref([])
+const allConnections = ref([])
 
 let chart = null
 let unsubscribeTraffic = null
 let unsubscribeConnections = null
+
+// 计算属性：总上传流量
+const totalUpload = computed(() => {
+  return allConnections.value.reduce((sum, conn) => sum + (conn.up || 0), 0)
+})
+
+// 计算属性：总下载流量
+const totalDownload = computed(() => {
+  return allConnections.value.reduce((sum, conn) => sum + (conn.down || 0), 0)
+})
 
 
 // 初始化图表
@@ -166,9 +185,14 @@ function updateChart(data) {
   chart.update()
 }
 
-// 更新连接列表
+// 更新连接列表（只显示活跃状态的子节点连接）
 function updateConnections(data) {
-  connections.value = data
+  // 存储全量数据用于流量统计
+  allConnections.value = data
+  // 只显示活跃状态的子节点连接
+  connections.value = data.filter(conn =>
+    conn.parentId !== 0 && conn.status === 'Active'
+  )
 }
 
 

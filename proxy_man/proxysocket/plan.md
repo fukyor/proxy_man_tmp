@@ -1,157 +1,127 @@
-# 延迟删除（墓碑机制）实施计划
+两个需求新的需求（层级显示连接、概览仅显示活跃连接）
+### 核心设计思路
 
-## 问题描述
+目前的后端数据是“扁平化”的数组，通过 `parentId` 关联。为了实现 UI 上的父子折叠效果，前端需要在接收数据后进行**结构化转换**（Flat-to-Tree），而不应直接修改后端存储结构。
 
-连接断开后立即从 `Connections` Map 删除，导致短连接（生命周期 < 2秒推送间隔）从未被 WebSocket 推送到前端。
+#### 1. 数据结构设计 (ViewModel Layer)
 
-**根本原因**：WebSocket 推送器每 2 秒轮询一次，短连接在两次推送之间完成了"创建-传输-关闭-删除"的全过程。
+我们需要在前端将接收到的扁平 `connections` 数组转换为以 `id` 为索引的树形结构或映射结构。
 
-## 解决方案
+**原始数据 (Flat):**
 
-采用**延迟删除（墓碑机制）**：连接关闭时不立即删除，而是标记为 "Closed" 状态，保留 3 秒后再物理删除。
+```json
+[
+  { "id": 1, "parentId": 0, ... },
+  { "id": 2, "parentId": 1, ... }
+]
 
----
-
-## 实施步骤
-
-### 1. 修改 ConnectionInfo 结构体
-
-**文件**: `mproxy/connections.go`
-
-添加两个字段：
-
-```go
-type ConnectionInfo struct {
-    // ... 现有字段 ...
-    Status   string    `json:"status"`   // "Active" 或 "Closed"
-    EndTime  time.Time `json:"endTime"`  // 连接关闭时间
-}
-
-// 添加便捷方法
-func (c *ConnectionInfo) MarkClosed() {
-    c.Status = "Closed"
-    c.EndTime = time.Now()
-}
 ```
 
-### 2. 添加 MarkConnectionClosed 方法
+**目标数据结构 (Tree/Grouped):**
+建议为每个父节点对象扩展两个属性：
 
-**文件**: `mproxy/connections.go`
+1. `children`: 数组，存放所有 `parentId` 等于该节点 `id` 的子连接。
+2. `_expanded`: 布尔值，用于控制 UI 上的折叠/展开状态（UI 状态字段）。
 
-```go
-func (proxy *CoreHttpServer) MarkConnectionClosed(session int64) {
-    if value, ok := proxy.Connections.Load(session); ok {
-        info := value.(*ConnectionInfo)
-        info.MarkClosed()
+```javascript
+// 转换后的父节点对象示例
+{
+  "id": 1,
+  "parentId": 0,
+  "host": "baidu.com:443",
+  "children": [
+    {
+      "id": 2,
+      "parentId": 1,
+      "host": "baidu.com:443",
+      "protocol": "HTTPS-MITM",
+      // ... 子节点数据
     }
+  ],
+  "_expanded": false, // UI控制字段
+  // ... 其他原始字段
 }
-```
 
-### 3. 修改所有 Store 调用（5处）
-
-在创建连接时初始化 `Status: "Active"`：
-
-| 文件              | 行号 | 协议类型     |
-| ----------------- | ---- | ------------ |
-| `mproxy/http.go`  | 33   | HTTP         |
-| `mproxy/https.go` | 199  | TUNNEL       |
-| `mproxy/https.go` | 272  | HTTPS-Tunnel |
-| `mproxy/https.go` | 369  | HTTP-MITM    |
-| `mproxy/https.go` | 544  | HTTPS-MITM   |
-
-### 4. 修改所有 Delete 调用（8处）
-
-将 `proxy.Connections.Delete(session)` 改为 `proxy.MarkConnectionClosed(session)`：
-
-| 文件                | 行号 | 说明                        |
-| ------------------- | ---- | --------------------------- |
-| `mproxy/http.go`    | 74   | respBodyReader.onClose 回调 |
-| `mproxy/http.go`    | 90   | 响应为空时                  |
-| `mproxy/https.go`   | 328  | HTTP MITM 隧道退出          |
-| `mproxy/https.go`   | 384  | HTTP MITM 子请求完成        |
-| `mproxy/https.go`   | 498  | TLS MITM 隧道退出           |
-| `mproxy/https.go`   | 559  | TLS MITM 子请求完成         |
-| `mproxy/actions.go` | 115  | 隧道 onClose 回调           |
-| `mproxy/actions.go` | 124  | 隧道 onClose 回调           |
-
-### 5. 修改推送器
-
-**文件**: `proxysocket/hub.go` 的 `StartConnectionPusher` 函数
-
-添加垃圾回收逻辑：
-
-```go
-func (h *WebSocketHub) StartConnectionPusher() {
-    const tombstoneRetention = 3 * time.Second
-
-    go func() {
-        ticker := time.NewTicker(2 * time.Second)
-        defer ticker.Stop()
-
-        for range ticker.C {
-            connections := make([]map[string]any, 0)
-            now := time.Now()
-
-            h.proxy.Connections.Range(func(key, value any) bool {
-                session := key.(int64)
-                info := value.(*mproxy.ConnectionInfo)
-
-                // 垃圾回收：已关闭且超过保留时间，物理删除
-                if info.Status == "Closed" && now.Sub(info.EndTime) > tombstoneRetention {
-                    h.proxy.Connections.Delete(session)
-                    return true
-                }
-
-                // 收集连接数据（包含 status 字段）
-                connData := map[string]any{
-                    "id":        info.Session,
-                    "parentId":  info.ParentSess,
-                    "host":      info.Host,
-                    "method":    info.Method,
-                    "url":       info.URL,
-                    "remote":    info.RemoteAddr,
-                    "protocol":  info.Protocol,
-                    "startTime": info.StartTime,
-                    "status":    info.Status,
-                }
-                // ... 流量字段 ...
-                connections = append(connections, connData)
-                return true
-            })
-
-            h.broadcastToTopic("connections", map[string]any{
-                "type": "connections",
-                "data": connections,
-            })
-        }
-    }()
-}
 ```
 
 ---
 
-## 关键文件清单
+### 方案一：详细连接界面 (Connections.vue)
 
-| 文件                    | 修改内容                       |
-| ----------------------- | ------------------------------ |
-| `mproxy/connections.go` | 添加 Status/EndTime 字段和方法 |
-| `mproxy/http.go`        | 1处 Store + 2处 Delete 修改    |
-| `mproxy/https.go`       | 4处 Store + 4处 Delete 修改    |
-| `mproxy/actions.go`     | 2处 Delete 修改                |
-| `proxysocket/hub.go`    | 推送器 GC 逻辑和 status 字段   |
+当前 `Connections.vue` 中的 `updateConnections` 函数有一行代码 `data.filter(conn => conn.parentId === 0)`，这直接丢弃了所有子连接。你需要修改这里的逻辑。
+
+#### 1. 数据处理逻辑 (Process Logic)
+
+不要在接收数据时直接过滤。建议在 `computed` 属性中执行“扁平转树形”的算法：
+
+1. **建立索引**：创建一个 Map 或 Object，以 `id` 为键，存储所有连接对象的引用。
+2. **构建树**：遍历原始数组。
+* 如果 `parentId === 0`，将其视为**根节点**放入结果数组。
+* 如果 `parentId !== 0`，在 Map 中找到对应的父节点，将当前节点 push 到父节点的 `children` 数组中。
+
+
+3. **统计聚合**（可选）：父节点的 `up`/`down` 流量通常需要包含子节点的流量，或者仅显示父节点自身的隧道流量。根据业务逻辑，你可能需要累加子节点的流量到父节点用于排序。
+
+#### 2. UI 渲染逻辑 (Render Strategy)
+
+在 `<table class="connections-table">` 中，不能简单地使用一个 `v-for`。建议采用 **Fragment** 或 **Flattened View** 的方式渲染：
+
+* **行结构设计**：
+* **父行 (Parent Row)**：显示 `parentId: 0` 的连接。第一列添加“展开/收起”图标（由 `_expanded` 状态控制）。
+* **子行 (Child Row)**：紧跟在父行之后。使用 `v-if="parent._expanded"` 控制渲染。
+* **样式区分**：子行需要添加缩进（Indent）或不同的背景色，以体现层级关系。
+
+
+* **排序处理**：
+* 排序功能（`handleSort`）应当仅作用于**父节点列表**。
+* 子节点在父节点内部通常按 `id` 或 `startTime` 排序即可，不应受全局排序影响打乱层级。
+
+
+
+#### 3. 搜索处理
+
+* 如果搜索匹配到了一个**子节点**，逻辑上应当自动显示其**父节点**，并自动将父节点设为 `expanded = true`，否则用户无法看到匹配结果。
 
 ---
 
-## 验证方法
+### 方案二：概览界面 (Overview.vue)
 
-1. 启动代理服务器：`go run main.go -v`
-2. 发起短请求：`curl -x localhost:8080 http://example.com`
-3. 观察 WebSocket 推送：
-   - 短连接应以 `"status": "Closed"` 出现
-   - 3 秒后从列表消失（物理删除）
-4. 验证长连接流量统计仍然正确
+当前 `Overview.vue` 直接接收全量数据。需求是仅显示 `status` 为 Active 的连接。
 
-## 前端兼容性
+#### 1. 数据过滤逻辑 (Filter Logic)
 
-- JSON 新增 `status` 字段（"Active" 或 "Closed"）
-- 可选：前端对 Closed 状态的连接显示灰色背景
+在 `Overview.vue` 中，利用 Vue 的 `computed` 属性对 `wsStore.connections` 进行过滤。
+
+* **过滤条件**：
+根据你提供的 JSON，已关闭的连接状态为 `"status": "Closed"`。
+过滤逻辑应为：`status !== 'Closed'` (或者根据你的定义，等于 `"Active"`, `"Open"`, `"Established"` 等明确的活跃状态)。
+
+#### 2. 状态更新机制
+
+* 由于 WebSocket 推送的是全量或增量更新，`wsStore` 中的数据可能是混合了历史记录（如果后端没清理）。
+* **确保**：`Overview.vue` 的 `computed` 属性必须依赖 `wsStore.connections`。当 WebSocket 更新 Store 时，Overview 的列表会自动刷新，剔除变为 `Closed` 的连接。
+
+---
+
+### 总结：实施步骤规划
+
+1. **修改 Store (`websocket.js`) 或 组件逻辑**：
+* 保留原始的扁平化数据在 Store 中（保证数据源的单一事实来源）。
+* 不要在 Store 层面做破坏性的过滤（除非数据量巨大需要性能优化）。
+
+
+2. **重构 `Connections.vue**`：
+* **废弃**：删除 `connections.value = data.filter(conn => conn.parentId === 0)` 这种直接丢弃数据的做法。
+* **新增**：引入 `buildConnectionTree(flatData)` 函数。
+* **状态**：引入一个 `expandedRowIds` 的 `Set` 结构来管理展开的行 ID（比修改数据对象更纯粹，避免响应式污染）。
+* **模板**：修改 `<table>` 结构，支持通过 `expandedRowIds.has(conn.id)` 来显示/隐藏子行。
+
+
+3. **重构 `Overview.vue**`：
+* **新增**：创建一个 `activeConnections` 的计算属性：
+`return connections.value.filter(c => c.status === 'Active')`（具体状态字符串需与后端对其）。
+* **替换**：模板中的 `v-for` 遍历源改为这个新的计算属性。
+
+
+
+通过这种设计，`Connections` 视图负责展示完整的调用链关系（HTTP over Tunnel），而 `Overview` 视图负责展示当前的实时负载情况，两者职责分离，数据源统一。

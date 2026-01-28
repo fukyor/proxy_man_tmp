@@ -5,16 +5,20 @@
     <!-- 统计信息栏 -->
     <div class="stats-bar">
       <div class="stat-item">
-        <span class="label">连接数:</span>
-        <span class="value">{{ connections.length }}</span>
+        <span class="label">隧道数:</span>
+        <span class="value">{{ tunnelCount }}</span>
       </div>
       <div class="stat-item">
-        <span class="label">总上传:</span>
-        <span class="value">{{ formatBytes(totalUpload) }}</span>
+        <span class="label">总连接:</span>
+        <span class="value">{{ totalConnections }}</span>
       </div>
       <div class="stat-item">
-        <span class="label">总下载:</span>
-        <span class="value">{{ formatBytes(totalDownload) }}</span>
+        <span class="label">活跃中:</span>
+        <span class="value active">{{ activeConnections }}</span>
+      </div>
+      <div class="stat-item">
+        <span class="label">已关闭:</span>
+        <span class="value closed">{{ closedConnections }}</span>
       </div>
     </div>
 
@@ -36,6 +40,7 @@
           <thead>
             <tr>
               <th @click="handleSort('id')" class="sortable">
+                <span class="expand-header-placeholder"></span>
                 ID
                 <span class="sort-icon" v-if="sortBy === 'id'">
                   {{ sortOrder === 'asc' ? '▲' : '▼' }}
@@ -85,8 +90,22 @@
                 {{ searchQuery ? '未找到匹配的连接' : '暂无活动连接' }}
               </td>
             </tr>
-            <tr v-for="conn in sortedConnections" :key="conn.id">
-              <td>{{ conn.id }}</td>
+            <tr
+              v-for="conn in sortedConnections"
+              :key="conn.id"
+              :class="{ 'parent-row': conn.isParent, 'child-row': !conn.isParent }"
+            >
+              <td>
+                <span
+                  v-if="conn.isParent && hasChildren(conn.id)"
+                  @click.stop="toggleExpand(conn.id)"
+                  class="expand-icon"
+                >
+                  {{ expandedIds.has(conn.id) ? '▼' : '▶' }}
+                </span>
+                <span v-else class="expand-placeholder"></span>
+                {{ conn.id }}
+              </td>
               <td>
                 <span class="badge method-badge" :class="getMethodClass(conn.method)">
                   {{ conn.method }}
@@ -116,28 +135,77 @@ import { useWebSocketStore } from '@/stores/websocket'
 const wsStore = useWebSocketStore()
 
 // 响应式数据
-const connections = ref([])
+const flatConnections = ref([])
 const searchQuery = ref('')
 const sortBy = ref('id')
 const sortOrder = ref('desc')
+const expandedIds = ref(new Set())
 
 let unsubscribeConnections = null
 
-// 计算属性：过滤后的连接
-const filteredConnections = computed(() => {
-  if (!searchQuery.value) {
-    return connections.value
-  }
-
-  const query = searchQuery.value.toLowerCase()
-  return connections.value.filter(conn =>
-    conn.host?.toLowerCase().includes(query) ||
-    conn.url?.toLowerCase().includes(query)
-  )
+// 计算属性：子节点映射表
+const childrenMap = computed(() => {
+  const map = {}
+  flatConnections.value.forEach(conn => {
+    if (conn.parentId !== 0) {
+      if (!map[conn.parentId]) map[conn.parentId] = []
+      map[conn.parentId].push(conn)
+    }
+  })
+  return map
 })
 
-// 计算属性：排序后的连接
+// 检查是否有子节点
+function hasChildren(id) {
+  return childrenMap.value[id] && childrenMap.value[id].length > 0
+}
+
+// 切换展开状态
+function toggleExpand(id) {
+  if (expandedIds.value.has(id)) {
+    expandedIds.value.delete(id)
+  } else {
+    expandedIds.value.add(id)
+  }
+}
+
+// 搜索时自动展开匹配的父节点
+function expandSearchResults() {
+  if (!searchQuery.value) return
+  const query = searchQuery.value.toLowerCase()
+  flatConnections.value.forEach(conn => {
+    if ((conn.host?.toLowerCase().includes(query) ||
+         conn.url?.toLowerCase().includes(query)) &&
+        conn.parentId !== 0) {
+      expandedIds.value.add(conn.parentId)
+    }
+  })
+}
+
+// 计算属性：过滤后的连接
+const filteredConnections = computed(() => {
+  // 获取根节点
+  let roots = flatConnections.value.filter(c => c.parentId === 0)
+
+  if (searchQuery.value) {
+    const query = searchQuery.value.toLowerCase()
+    // 过滤匹配的根节点
+    roots = roots.filter(conn =>
+      conn.host?.toLowerCase().includes(query) ||
+      conn.url?.toLowerCase().includes(query) ||
+      // 或者有匹配的子节点
+      (childrenMap.value[conn.id] || []).some(child =>
+        child.host?.toLowerCase().includes(query) ||
+        child.url?.toLowerCase().includes(query)
+      )
+    )
+  }
+  return roots
+})
+
+// 计算属性：排序后的连接（构建扁平化列表包含展开的子节点）
 const sortedConnections = computed(() => {
+  // 对根节点排序
   const sorted = [...filteredConnections.value]
 
   sorted.sort((a, b) => {
@@ -159,22 +227,44 @@ const sortedConnections = computed(() => {
     return 0
   })
 
-  return sorted
+  // 构建扁平化列表（包含展开的子节点）
+  const result = []
+  sorted.forEach(parent => {
+    result.push({ ...parent, isParent: true })
+    if (expandedIds.value.has(parent.id) && childrenMap.value[parent.id]) {
+      childrenMap.value[parent.id].forEach(child => {
+        result.push({ ...child, isParent: false })
+      })
+    }
+  })
+  return result
 })
 
-// 计算属性：总上传流量
-const totalUpload = computed(() => {
-  return connections.value.reduce((sum, conn) => sum + (conn.up || 0), 0)
+// 计算属性：隧道数（根节点数量）
+const tunnelCount = computed(() => {
+  return flatConnections.value.filter(c => c.parentId === 0).length
 })
 
-// 计算属性：总下载流量
-const totalDownload = computed(() => {
-  return connections.value.reduce((sum, conn) => sum + (conn.down || 0), 0)
+// 计算属性：所有连接数（子节点数量）
+const totalConnections = computed(() => {
+  return flatConnections.value.filter(c => c.parentId !== 0).length
 })
 
-// 更新连接列表（只显示顶层隧道连接）
+// 计算属性：活跃连接数
+const activeConnections = computed(() => {
+  return flatConnections.value.filter(c => c.parentId !== 0 && c.status === 'Active').length
+})
+
+// 计算属性：已关闭连接数
+const closedConnections = computed(() => {
+  return flatConnections.value.filter(c => c.parentId !== 0 && c.status === 'Closed').length
+})
+
+// 更新连接列表（存储全量数据）
 function updateConnections(data) {
-  connections.value = data.filter(conn => conn.parentId === 0)
+  flatConnections.value = data
+  // 搜索时自动展开匹配的父节点
+  expandSearchResults()
 }
 
 // 处理排序
@@ -484,6 +574,57 @@ h1 {
 
 .protocol-default {
   background: rgba(108, 117, 125, 0.2);
+  color: #6c757d;
+}
+
+/* 展开图标 */
+.expand-icon {
+  cursor: pointer;
+  display: inline-block;
+  width: 16px;
+  margin-right: 8px;
+  color: #cba376;
+  user-select: none;
+}
+
+.expand-icon:hover {
+  color: #fff;
+}
+
+.expand-placeholder {
+  display: inline-block;
+  width: 24px;
+}
+
+.expand-header-placeholder {
+  display: inline-block;
+  width: 24px;
+}
+
+/* 父行样式 */
+.parent-row {
+  background: #2a2a2a;
+}
+
+/* 子行样式 */
+.child-row {
+  background: #222;
+}
+
+.child-row td:first-child {
+  padding-left: 40px;
+}
+
+.child-row:hover {
+  background: #2d2d2d !important;
+}
+
+/* 统计值状态样式 */
+.stat-item .value.active {
+  color: #28a745;
+}
+
+.stat-item .value.closed {
   color: #6c757d;
 }
 </style>

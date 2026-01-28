@@ -13,8 +13,6 @@ type ConnectionInfo struct {
 	StartTime   time.Time `json:"startTime"`
 	Status      string    `json:"status"`    // "Active" 或 "Closed"
 	EndTime     time.Time `json:"endTime"`   // 连接关闭时间
-	PuploadRef	*int64	  `json:"-"`
-	PdownloadRef *int64   `json:"-"`
 	UploadRef   *int64    `json:"-"`         // 用于读取实时值，这是活动连接流量实时更新的关键
 	DownloadRef *int64    `json:"-"`
 	OnClose     func()    `json:"-"`
