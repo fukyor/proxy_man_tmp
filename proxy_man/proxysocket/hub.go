@@ -88,7 +88,7 @@ func (h *WebSocketHub) StartTrafficPusher() {
 
 // 连接推送器（每 2 秒推送一次）
 func (h *WebSocketHub) StartConnectionPusher() {
-	const tombstoneRetention = 3 * time.Second
+	const tombstoneRetention = 3500 * time.Millisecond
 
 	go func() {
 		ticker := time.NewTicker(2 * time.Second)

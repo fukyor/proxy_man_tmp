@@ -432,9 +432,10 @@ func (proxy *CoreHttpServer) MyHttpsHandle(w http.ResponseWriter, r *http.Reques
 				defer resp.Body.Close()
 
 				isWebsocket := isWebSocketHandshake(resp.Header)
-				if !isWebsocket {
+				if !isWebsocket && !proxy.ConnectMaintain{
 					resp.Header.Set("Connection", "close")
 				}
+				 
 				// 使用 httputil.DumpResponse 获取完整头部（包含状态行）
 				headerBytes, err := httputil.DumpResponse(resp, false)
 				if err != nil {
@@ -487,7 +488,7 @@ func (proxy *CoreHttpServer) MyHttpsHandle(w http.ResponseWriter, r *http.Reques
 		}
 		// 正常退出，收到client EOF
 		topctx.Log_P("Connect Tunnel Normal Exiting on Client EOF")
-		
+
 	case ConnectMitm:
 		_, _ = connFromClinet.Write([]byte("HTTP/1.0 200 OK\r\n\r\n"))
 		topctx.Log_P("tls中间人劫持, TLS Mitm")
@@ -618,7 +619,7 @@ func (proxy *CoreHttpServer) MyHttpsHandle(w http.ResponseWriter, r *http.Reques
 					// 之所以需要主动发送close的原因是proxy到target的隧道关闭后，这里proxy是不会通知client的。两个方向
 					// 完全解耦，导致proxy完全依赖于client的EOF关闭tcp，所以为了避免client一直不关闭tcp，导致proxy资源浪费
 					// proxy的方案就是主动告诉客户端 connection：close
-					if !isWebsocket {
+					if !isWebsocket && !proxy.ConnectMaintain{
 						resp.Header.Set("Connection", "close")
 					}
 

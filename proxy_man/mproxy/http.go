@@ -39,8 +39,8 @@ func (proxy *CoreHttpServer) MyHttpHandle(w http.ResponseWriter, r *http.Request
 		Protocol:    "HTTP",
 		StartTime:   time.Now(),
 		Status:      "Active",
-		UploadRef:   &ctxt.TrafficCounter.req_body,
-		DownloadRef: &ctxt.TrafficCounter.resp_body,
+		UploadRef:   &ctxt.TrafficCounter.req_sum,
+		DownloadRef: &ctxt.TrafficCounter.req_sum,
 		OnClose:     func() { cancel() },
 	})
 
