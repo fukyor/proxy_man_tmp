@@ -17,6 +17,7 @@ func main() {
 	proxy := mproxy.NewCoreHttpSever()
 	proxy.Verbose = *verbose
 	proxy.AllowHTTP2 = false
+	proxy.KeepAcceptEncoding = false
 	proxy.PreventParseHeader = false
 	proxy.KeepDestHeaders = false
 	proxy.ConnectMaintain = true

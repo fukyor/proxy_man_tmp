@@ -17,6 +17,7 @@ import (
 	"sync"
 	"sync/atomic"
 	"time"
+	"strconv"
 )
 
 type ConnectActionSelecter int
@@ -652,15 +653,24 @@ func (proxy *CoreHttpServer) MyHttpsHandle(w http.ResponseWriter, r *http.Reques
 					}
 
 					// 普通响应写回响应头
-					headerBytes, err := httputil.DumpResponse(resp, false)
-					if err != nil {
-						ctxt.WarnP("Cannot dump TLS response header: %v", err)
+					//headerBytes, err := httputil.DumpResponse(resp, false)
+					text := resp.Status
+					statusCode := strconv.Itoa(resp.StatusCode) + " "
+					text = strings.TrimPrefix(text, statusCode)
+					// always use 1.1 to support chunked encoding
+					if _, err := io.WriteString(tlsConn, "HTTP/1.1"+" "+statusCode+text+"\r\n"); err != nil {
+						ctxt.WarnP("Cannot write TLS response HTTP status from mitm'd client: %v", err)
 						return false
 					}
-					if _, err := tlsConn.Write(headerBytes); err != nil {
-						ctxt.WarnP("Cannot write TLS response header from mitm'd client: %v", err)
-						return false
-					}
+
+					// if err != nil {
+					// 	ctxt.WarnP("Cannot dump TLS response header: %v", err)
+					// 	return false
+					// }
+					// if _, err := tlsConn.Write(headerBytes); err != nil {
+					// 	ctxt.WarnP("Cannot write TLS response header from mitm'd client: %v", err)
+					// 	return false
+					// }
 
 					// 加密传输http body(区分chunked传输和普通传输)
 					if resp.Request.Method == http.MethodHead ||
