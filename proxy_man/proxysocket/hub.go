@@ -3,7 +3,7 @@ package proxysocket
 import (
 	"encoding/json"
 	"time"
-	//"log"
+	// "log"
 	"github.com/gorilla/websocket"
 	"proxy_man/mproxy"
 )
@@ -88,26 +88,35 @@ func (h *WebSocketHub) StartTrafficPusher() {
 
 // 连接推送器（每 2 秒推送一次）
 func (h *WebSocketHub) StartConnectionPusher() {
+	const tombstoneRetention = 3 * time.Second
+
 	go func() {
 		ticker := time.NewTicker(2 * time.Second)
 		defer ticker.Stop()
 
 		for range ticker.C {
 			connections := make([]map[string]any, 0)
+			now := time.Now()
 
 			h.proxy.Connections.Range(func(key, value any) bool {
+				session := key.(int64)
 				info := value.(*mproxy.ConnectionInfo)
-				connData := map[string]any{
-					"id":       info.Session,
-					"parentId": info.ParentSess,
-					"host":     info.Host,
-					"method":   info.Method,
-					"url":      info.URL,
-					"remote":   info.RemoteAddr,
-					"protocol": info.Protocol,
-					"startTime": info.StartTime,
+				// 垃圾回收：已关闭且超过保留时间，物理删除
+				if info.Status == "Closed" && now.Sub(info.EndTime) > tombstoneRetention {
+					h.proxy.Connections.Delete(session)
+					return true
 				}
-
+				connData := map[string]any{
+					"id":        info.Session,
+					"parentId":  info.ParentSess,
+					"host":      info.Host,
+					"method":    info.Method,
+					"url":       info.URL,
+					"remote":    info.RemoteAddr,
+					"protocol":  info.Protocol,
+					"startTime": info.StartTime,
+					"status":    info.Status,
+				}
 				// 读取实时流量（如果有引用）
 				if info.UploadRef != nil {
 					connData["up"] = *info.UploadRef

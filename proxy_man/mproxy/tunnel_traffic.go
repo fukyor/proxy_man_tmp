@@ -39,7 +39,9 @@ func (w *tunnelTrafficClient) Write(p []byte) (n int, err error) {
 }
 
 func (c *tunnelTrafficClient) Close() error {
-	c.onClose()
+	if c.onClose != nil {
+		c.onClose()
+	}
 	c.onClose = nil
 	return c.halfClosable.Close()
 }
@@ -50,7 +52,7 @@ type tunnelTrafficClientNoClosable struct {
 	conn net.Conn
 	nread int64
 	nwrite int64
-	onUpdate func()
+	onClose func()
 }
 
 func newtunnelTrafficClientNoClosable(conn net.Conn) (*tunnelTrafficClientNoClosable){
@@ -76,45 +78,12 @@ func (w *tunnelTrafficClientNoClosable) Write(p []byte) (n int, err error) {
 }
 
 func (c *tunnelTrafficClientNoClosable) Close() error {
-	c.onUpdate()
-	c.onUpdate = nil
+	if c.onClose != nil {
+		c.onClose()
+	}
+	c.onClose = nil
 	return c.conn.Close()
 }
-
-
-
-// type TopTrafficReqBodyReader struct {
-// 	reqBodyReader
-// 	nread int64
-// }
-
-// func (t *TopTrafficReqBodyReader) Read(p []byte) (n int, err error) {
-// 	n, err = t.reqBodyReader.Read(p)
-// 	atomic.AddInt64(&t.nread, int64(n))
-// 	return
-// }
-
-// func (r *TopTrafficReqBodyReader) Close() error {
-// 	return r.reqBodyReader.Close()
-// }
-
-
-
-// type TopTrafficRespBodyReader struct {
-// 	respBodyReader
-// 	nread int64
-// }
-
-// func (t *TopTrafficRespBodyReader) Read(p []byte) (n int, err error) {
-// 	n, err = t.respBodyReader.Read(p)
-// 	atomic.AddInt64(&t.nread, int64(n))
-// 	return
-// }
-
-// func (r *TopTrafficRespBodyReader) Close() error {
-// 	return r.respBodyReader.Close()
-// }
-
 
 
 

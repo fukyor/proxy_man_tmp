@@ -38,6 +38,7 @@ func (proxy *CoreHttpServer) MyHttpHandle(w http.ResponseWriter, r *http.Request
 		RemoteAddr:  r.RemoteAddr,
 		Protocol:    "HTTP",
 		StartTime:   time.Now(),
+		Status:      "Active",
 		UploadRef:   &ctxt.TrafficCounter.req_body,
 		DownloadRef: &ctxt.TrafficCounter.resp_body,
 		OnClose:     func() { cancel() },
@@ -71,7 +72,7 @@ func (proxy *CoreHttpServer) MyHttpHandle(w http.ResponseWriter, r *http.Request
 				if originalOnClose != nil {
 					originalOnClose()
 				}
-				proxy.Connections.Delete(ctxt.Session)
+				proxy.MarkConnectionClosed(ctxt.Session)
 			}
 		}
 	}
@@ -87,7 +88,7 @@ func (proxy *CoreHttpServer) MyHttpHandle(w http.ResponseWriter, r *http.Request
 			ctxt.Log_P(errorString)
 			http.Error(w, errorString, http.StatusInternalServerError)
 		}
-		proxy.Connections.Delete(ctxt.Session) // 如果响应为空，也需要注销连接
+		proxy.MarkConnectionClosed(ctxt.Session) // 如果响应为空，也需要注销连接
 		return  // hanler函数结束后，go会自动释放连接
 	}
 

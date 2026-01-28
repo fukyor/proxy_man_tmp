@@ -135,7 +135,7 @@ export const useWebSocketStore = defineStore('websocket', () => {
   }
 
   /**
-   * 处理流量数据
+   * 处理全局流量数据
    * @param {Object} data - 流量数据 { up, down }
    */
   function handleTraffic(data) {
@@ -154,7 +154,7 @@ export const useWebSocketStore = defineStore('websocket', () => {
    * @param {Array} data - 连接列表
    */
   function handleConnections(data) {
-    connections.value = data
+    console.log(JSON.stringify(data, null, 2));
     // 通知所有订阅者，订阅者就是不同的组件，它们把回调函数预先注册到trafficSubscribers
     connectionsSubscribers.value.forEach(cb => cb(data))
   }

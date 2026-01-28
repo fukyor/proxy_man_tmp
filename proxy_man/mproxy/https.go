@@ -204,9 +204,10 @@ func (proxy *CoreHttpServer) MyHttpsHandle(w http.ResponseWriter, r *http.Reques
 		URL:         r.URL.Host,
 		RemoteAddr:  r.RemoteAddr,
 		Protocol:    "TUNNEL",
-		UploadRef:   &topctx.TrafficCounter.req_sum,   // 指向累加器
-		DownloadRef: &topctx.TrafficCounter.req_sum,   // 指向累加器
 		StartTime:   time.Now(),
+		Status:      "Active",
+		UploadRef:   &topctx.TrafficCounter.req_sum,
+		DownloadRef: &topctx.TrafficCounter.resp_sum,
 	})
 
 	// 创建hijack
@@ -241,6 +242,7 @@ func (proxy *CoreHttpServer) MyHttpsHandle(w http.ResponseWriter, r *http.Reques
 			host += ":80"
 		}
 		connRemoteSite, err := proxy.connectDial(topctx, "tcp", host)
+
 		if err != nil {
 			topctx.WarnP("拨号获取套接字错误Error dialing to %s: %s", host, err.Error())
 			httpError(connRemoteSite, topctx, err) // 如果出错手动关闭连接
@@ -277,22 +279,14 @@ func (proxy *CoreHttpServer) MyHttpsHandle(w http.ResponseWriter, r *http.Reques
 			RemoteAddr:  r.RemoteAddr,
 			Protocol:    "HTTPS-Tunnel",
 			StartTime:   time.Now(),
+			Status:      "Active",
 			UploadRef:   &proxyClientTCP.nread,   // nread = 从客户端读 = Upload
 			DownloadRef: &proxyClientTCP.nwrite,  // nwrite = 写给客户端 = Download
 			OnClose:     func() { connFromClinet.Close() },
 		})
-		
-		// 使用闭包(捕获了外部变量的匿名函数)捕获 Counter_Ctxt，访问其流量数据
-		proxyClientTCP.onClose = func() {
-			Counter_Ctxt.Log_P("[流量统计] 上行: %d | 下行: %d | 总计: %d ",
-				Counter_Ctxt.tunnelTrafficClient.nread,
-				Counter_Ctxt.tunnelTrafficClient.nwrite,
-				Counter_Ctxt.tunnelTrafficClient.nread + Counter_Ctxt.tunnelTrafficClient.nwrite,
-				)
-			// 在连接关闭时注销
-			proxy.Connections.Delete(topctx.Session)
-			proxy.Connections.Delete(Counter_Ctxt.Session)
-		}
+		// 注册流量统计回调
+		tunnelMonitor(proxy)
+		proxy.filterRequest(r, Counter_Ctxt)
 
 		targetTCP, targetOK := connRemoteSite.(halfClosable)
 		
@@ -333,7 +327,7 @@ func (proxy *CoreHttpServer) MyHttpsHandle(w http.ResponseWriter, r *http.Reques
 		_, _ = connFromClinet.Write([]byte("HTTP/1.0 200 OK\r\n\r\n"))
 		topctx.Log_P("HTTP Tunnel established, http MITM")
 
-		defer proxy.Connections.Delete(tunnelSession) // 清理隧道记录
+		defer proxy.MarkConnectionClosed(tunnelSession) // 清理隧道记录
 
 		var connRemoteSite net.Conn
 		var remote_res *bufio.Reader
@@ -355,7 +349,7 @@ func (proxy *CoreHttpServer) MyHttpsHandle(w http.ResponseWriter, r *http.Reques
 			// 检查是否是正常的连接关闭错误（EOF, ErrClosed, 或 net.OpError 导致的连接关闭）
 			isConnClosed := httpMitmCheckError(err)
 			if err != nil && !isConnClosed {
-				topctx.WarnP("http协议解析错误http parser errror: %+#v", err)
+				topctx.WarnP("http协议解析错误, 检查请求协议是否为http parser errror: %+#v", err)
 			}
 			if err != nil {
 				return
@@ -383,13 +377,14 @@ func (proxy *CoreHttpServer) MyHttpsHandle(w http.ResponseWriter, r *http.Reques
 					RemoteAddr:  r.RemoteAddr,
 					Protocol:    "HTTP-MITM",
 					StartTime:   time.Now(),
+					Status:      "Active",
 					PuploadRef:  &ctxt.parCtx.TrafficCounter.req_sum,
 					PdownloadRef: &ctxt.parCtx.TrafficCounter.resp_sum,
 					UploadRef:   &ctxt.TrafficCounter.req_sum,
 					DownloadRef: &ctxt.TrafficCounter.resp_sum,
 					OnClose:     func() { finishRequest() },
 				})
-				defer proxy.Connections.Delete(ctxt.Session) // 在请求完成后注销
+				defer proxy.MarkConnectionClosed(ctxt.Session) // 在请求完成后注销
 
 				// 模仿标准库为request绑定上下文
 				requestContext, CancelR := context.WithCancel(req.Context())
@@ -486,9 +481,13 @@ func (proxy *CoreHttpServer) MyHttpsHandle(w http.ResponseWriter, r *http.Reques
 				return true
 			}
 			if !requestOk(req) {
-				break
+				// 错误已打印
+				return
 			}
 		}
+		// 正常退出，收到client EOF
+		topctx.Log_P("Connect Tunnel Normal Exiting on Client EOF")
+		
 	case ConnectMitm:
 		_, _ = connFromClinet.Write([]byte("HTTP/1.0 200 OK\r\n\r\n"))
 		topctx.Log_P("tls中间人劫持, TLS Mitm")
@@ -503,7 +502,7 @@ func (proxy *CoreHttpServer) MyHttpsHandle(w http.ResponseWriter, r *http.Reques
 			}
 		}
 		go func() {
-			defer proxy.Connections.Delete(tunnelSession) // 清理隧道记录
+			defer proxy.MarkConnectionClosed(tunnelSession) // 清理隧道记录
 
 			tlsConn := tls.Server(connFromClinet, tlsConfig)
 			defer tlsConn.Close()
@@ -558,13 +557,14 @@ func (proxy *CoreHttpServer) MyHttpsHandle(w http.ResponseWriter, r *http.Reques
 						RemoteAddr:  r.RemoteAddr,
 						Protocol:    "HTTPS-MITM",
 						StartTime:   time.Now(),
+						Status:      "Active",
 						PuploadRef:  &ctxt.parCtx.TrafficCounter.req_sum,
 						PdownloadRef: &ctxt.parCtx.TrafficCounter.resp_sum,
 						UploadRef:   &ctxt.TrafficCounter.req_sum,
 						DownloadRef: &ctxt.TrafficCounter.resp_sum,
 						OnClose:     func() { finishRequest() },
 					})
-					defer proxy.Connections.Delete(ctxt.Session) // 在请求完成后注销
+					defer proxy.MarkConnectionClosed(ctxt.Session) // 在请求完成后注销
 
 					ctxt.Req = req
 
@@ -700,7 +700,7 @@ func (proxy *CoreHttpServer) MyHttpsHandle(w http.ResponseWriter, r *http.Reques
 				}
 			}
 			// 正常退出，收到client EOF
-			topctx.Log_P("Normal Exiting on EOF")
+			topctx.Log_P("Connect Tunnel Normal Exiting on Client EOF")
 		}()
 	}
 }

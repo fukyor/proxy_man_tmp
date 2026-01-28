@@ -101,6 +101,34 @@ func PrintRespHeader(proxy *CoreHttpServer) {
 	})
 }
 
+func tunnelMonitor(proxy *CoreHttpServer) {
+	proxy.HookOnReq().DoFunc(func(req *http.Request, ctx *Pcontext) (*http.Request, *http.Response) {
+		// 使用闭包(捕获了外部变量的匿名函数)捕获 Counter_Ctxt，访问其流量数据
+		// 因为tunnel模式无法设置resp
+		ctx.tunnelTrafficClient.onClose = func() {
+			ctx.Log_P("[流量统计] 上行: %d | 下行: %d | 总计: %d ",
+				ctx.tunnelTrafficClient.nread,
+				ctx.tunnelTrafficClient.nwrite,
+				ctx.tunnelTrafficClient.nread + ctx.tunnelTrafficClient.nwrite,
+				)
+			// 在连接关闭时注销
+			proxy.MarkConnectionClosed(ctx.Session)
+		}
+		ctx.tunnelTrafficClientNoClosable.onClose = func() {
+			ctx.Log_P("[流量统计] 上行: %d | 下行: %d | 总计: %d ",
+				ctx.tunnelTrafficClientNoClosable.nread,
+				ctx.tunnelTrafficClientNoClosable.nwrite,
+				ctx.tunnelTrafficClientNoClosable.nread + ctx.tunnelTrafficClientNoClosable.nwrite,
+			)
+			// 在连接关闭时注销
+			proxy.MarkConnectionClosed(ctx.Session)
+		}
+		return req, nil
+	})
+}
+
+
+
 var httpDomains = map[string]bool{
 	"example.com": true,
 }

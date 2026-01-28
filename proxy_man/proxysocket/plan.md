@@ -1,265 +1,157 @@
-# 隧道流量统计修复实现计划
+# 延迟删除（墓碑机制）实施计划
 
 ## 问题描述
 
-当前隧道流量统计使用的 `var tunnelUp, tunnelDown *int64` 不能正确完成统计，主要问题：
+连接断开后立即从 `Connections` Map 删除，导致短连接（生命周期 < 2秒推送间隔）从未被 WebSocket 推送到前端。
 
-1. **首次注册时指针为 nil**：`https.go:200-211` 行注册连接时，`tunnelUp` 和 `tunnelDown` 还未赋值（值为 nil）
-2. **重复注册覆盖**：`https.go:271-282` 行用相同 Session ID 重新注册，覆盖了第一次注册
-3. **并发安全问题**：`nread` 和 `nwrite` 是普通 `int64` 类型，在 WebSocket 推送时通过指针读取可能存在数据竞争
+**根本原因**：WebSocket 推送器每 2 秒轮询一次，短连接在两次推送之间完成了"创建-传输-关闭-删除"的全过程。
 
 ## 解决方案
 
-扩展 `ConnectionInfo` 结构，新增 `TunnelUp` 和 `TunnelDown` 字段（类型为 `atomic.Int64`），专门用于隧道模式流量统计。
+采用**延迟删除（墓碑机制）**：连接关闭时不立即删除，而是标记为 "Closed" 状态，保留 3 秒后再物理删除。
 
 ---
 
-## 文件修改清单
+## 实施步骤
 
-| 文件                       | 修改内容                                                     |
-| -------------------------- | ------------------------------------------------------------ |
-| `mproxy/connections.go`    | 扩展 `ConnectionInfo`，新增 `TunnelUp`、`TunnelDown` 原子计数器 |
-| `mproxy/tunnel_traffic.go` | 修改 `tunnelTrafficClient`，关联 `ConnectionInfo` 并更新原子计数器 |
-| `mproxy/https.go`          | 重构隧道模式连接注册逻辑，消除外部变量依赖                   |
-| `proxysocket/hub.go`       | 修改流量读取逻辑，支持隧道模式流量读取                       |
+### 1. 修改 ConnectionInfo 结构体
 
----
+**文件**: `mproxy/connections.go`
 
-## 详细实现步骤
-
-### 1. 修改 `mproxy/connections.go`
-
-**修改位置**：`ConnectionInfo` 结构体定义
-
-**新增字段**：
+添加两个字段：
 
 ```go
 type ConnectionInfo struct {
     // ... 现有字段 ...
-    TunnelUp   atomic.Int64  // 隧道模式上行流量计数器
-    TunnelDown atomic.Int64  // 隧道模式下行流量计数器
+    Status   string    `json:"status"`   // "Active" 或 "Closed"
+    EndTime  time.Time `json:"endTime"`  // 连接关闭时间
+}
+
+// 添加便捷方法
+func (c *ConnectionInfo) MarkClosed() {
+    c.Status = "Closed"
+    c.EndTime = time.Now()
 }
 ```
 
-**说明**：
+### 2. 添加 MarkConnectionClosed 方法
 
-- 新字段位于 `DownloadRef` 之后
-- 使用 `atomic.Int64` 类型保证并发安全
-- 初始值为 0，自动初始化
-
----
-
-### 2. 修改 `mproxy/tunnel_traffic.go`
-
-**修改 1：`tunnelTrafficClient` 结构体**
-
-新增 `connInfo` 字段，存储对 `ConnectionInfo` 的引用：
+**文件**: `mproxy/connections.go`
 
 ```go
-type tunnelTrafficClient struct {
-    halfClosable
-    connInfo   *ConnectionInfo  // 新增：指向连接信息
-    nread      int64           // 保留：用于日志输出
-    nwrite     int64           // 保留：用于日志输出
-    onUpdate   func()
-}
-```
-
-**修改 2：`newTunnelTrafficClient` 构造函数**
-
-修改签名，接收 `ConnectionInfo` 参数：
-
-```go
-func newTunnelTrafficClient(conn net.Conn, connInfo *ConnectionInfo) (*tunnelTrafficClient, bool)
-```
-
-**修改 3：`Read` 方法**
-
-在累加 `nread` 的同时更新原子计数器：
-
-```go
-func (r *tunnelTrafficClient) Read(p []byte) (n int, err error) {
-    n, err = r.halfClosable.Read(p)
-    r.nread += int64(n)
-    GlobalTrafficUp.Add(int64(n))
-    r.connInfo.TunnelUp.Add(int64(n))  // 新增
-    return n, err
-}
-```
-
-**修改 4：`Write` 方法**
-
-在累加 `nwrite` 的同时更新原子计数器：
-
-```go
-func (w *tunnelTrafficClient) Write(p []byte) (n int, err error) {
-    n, err = w.halfClosable.Write(p)
-    w.nwrite += int64(n)
-    GlobalTrafficDown.Add(int64(n))
-    r.connInfo.TunnelDown.Add(int64(n))  // 新增
-    return n, err
-}
-```
-
-**修改 5：`tunnelTrafficClientNoClosable`**
-
-同样需要修改结构体、构造函数、`Read` 和 `Write` 方法。
-
----
-
-### 3. 修改 `mproxy/https.go`
-
-**步骤 1：删除外部变量声明（第 197 行）**
-
-删除或注释掉：
-
-```go
-var tunnelUp, tunnelDown *int64
-```
-
-**步骤 2：删除首次注册（第 200-211 行）**
-
-完全删除第一次注册连接的代码，避免重复注册。
-
-**步骤 3：重构 `ConnectAccept` 分支（第 240-320 行）**
-
-**修改前**：
-
-```go
-proxyClientTCP, clientOK := newTunnelTrafficClient(connFromClinet)
-
-// ... 稍后注册 ...
-proxy.Connections.Store(topctxt.Session, &ConnectionInfo{
-    UploadRef:   &proxyClientTCP.nread,
-    DownloadRef: &proxyClientTCP.nwrite,
-})
-tunnelUp = &proxyClientTCP.nread
-tunnelDown = &proxyClientTCP.nwrite
-```
-
-**修改后**：
-
-```go
-// 1. 先创建 ConnectionInfo 对象
-connInfo := &ConnectionInfo{
-    Session:     topctxt.Session,
-    Host:        host,
-    Method:      "TUNNEL",
-    URL:         host,
-    RemoteAddr:  r.RemoteAddr,
-    Protocol:    "HTTPS-Tunnel",
-    StartTime:   time.Now(),
-    OnClose:     func() { connFromClinet.Close() },
-}
-
-// 2. 存储 ConnectionInfo
-proxy.Connections.Store(topctxt.Session, connInfo)
-
-// 3. 创建包装器并关联 ConnectionInfo
-proxyClientTCP, clientOK := newTunnelTrafficClient(connFromClinet, connInfo)
-proxyClientTCPNo := newtunnelTrafficClientNoClosable(connFromClinet, connInfo)
-
-// 4. 删除 tunnelUp 和 tunnelDown 的赋值（不再需要）
-```
-
-**步骤 4：清理 MITM 模式中的无效赋值**
-
-删除或注释以下行：
-
-- `https.go:390-391`（HTTP-MITM 模式）：`tunnelUp = &ctxt.TrafficCounter.req_sum`
-- `https.go:560-561`（HTTPS-MITM 模式）：`tunnelDown = &ctxt.TrafficCounter.resp_sum`
-
-**说明**：这些赋值没有实际作用，因为 HTTP/HTTPS-MITM 使用 `TrafficCounter`，不涉及隧道。
-
----
-
-### 4. 修改 `proxysocket/hub.go`
-
-**修改位置**：`StartConnectionPusher` 方法中的流量读取逻辑（第 110-116 行）
-
-**修改前**：
-
-```go
-if info.UploadRef != nil {
-    connData["up"] = *info.UploadRef
-}
-if info.DownloadRef != nil {
-    connData["down"] = *info.DownloadRef
-}
-```
-
-**修改后**：
-
-```go
-// 优先读取隧道模式流量
-if info.Protocol == "HTTPS-Tunnel" {
-    connData["up"] = info.TunnelUp.Load()
-    connData["down"] = info.TunnelDown.Load()
-} else {
-    // HTTP/MITM 模式使用 UploadRef/DownloadRef
-    if info.UploadRef != nil {
-        connData["up"] = *info.UploadRef
-    }
-    if info.DownloadRef != nil {
-        connData["down"] = *info.DownloadRef
+func (proxy *CoreHttpServer) MarkConnectionClosed(session int64) {
+    if value, ok := proxy.Connections.Load(session); ok {
+        info := value.(*ConnectionInfo)
+        info.MarkClosed()
     }
 }
 ```
 
----
+### 3. 修改所有 Store 调用（5处）
 
-## 向后兼容性保证
+在创建连接时初始化 `Status: "Active"`：
 
-| 模式         | 流量数据来源                                        | 说明               |
-| ------------ | --------------------------------------------------- | ------------------ |
-| HTTPS-Tunnel | `TunnelUp`、`TunnelDown`（原子计数器）              | 新增字段，线程安全 |
-| HTTP         | `UploadRef`、`DownloadRef`（指向 `TrafficCounter`） | 保持不变           |
-| HTTPS-MITM   | `UploadRef`、`DownloadRef`（指向 `TrafficCounter`） | 保持不变           |
+| 文件              | 行号 | 协议类型     |
+| ----------------- | ---- | ------------ |
+| `mproxy/http.go`  | 33   | HTTP         |
+| `mproxy/https.go` | 199  | TUNNEL       |
+| `mproxy/https.go` | 272  | HTTPS-Tunnel |
+| `mproxy/https.go` | 369  | HTTP-MITM    |
+| `mproxy/https.go` | 544  | HTTPS-MITM   |
 
----
+### 4. 修改所有 Delete 调用（8处）
 
-## 验证方案
+将 `proxy.Connections.Delete(session)` 改为 `proxy.MarkConnectionClosed(session)`：
 
-### 编译检查
+| 文件                | 行号 | 说明                        |
+| ------------------- | ---- | --------------------------- |
+| `mproxy/http.go`    | 74   | respBodyReader.onClose 回调 |
+| `mproxy/http.go`    | 90   | 响应为空时                  |
+| `mproxy/https.go`   | 328  | HTTP MITM 隧道退出          |
+| `mproxy/https.go`   | 384  | HTTP MITM 子请求完成        |
+| `mproxy/https.go`   | 498  | TLS MITM 隧道退出           |
+| `mproxy/https.go`   | 559  | TLS MITM 子请求完成         |
+| `mproxy/actions.go` | 115  | 隧道 onClose 回调           |
+| `mproxy/actions.go` | 124  | 隧道 onClose 回调           |
 
-```bash
-go build -o proxy_man main.go
+### 5. 修改推送器
+
+**文件**: `proxysocket/hub.go` 的 `StartConnectionPusher` 函数
+
+添加垃圾回收逻辑：
+
+```go
+func (h *WebSocketHub) StartConnectionPusher() {
+    const tombstoneRetention = 3 * time.Second
+
+    go func() {
+        ticker := time.NewTicker(2 * time.Second)
+        defer ticker.Stop()
+
+        for range ticker.C {
+            connections := make([]map[string]any, 0)
+            now := time.Now()
+
+            h.proxy.Connections.Range(func(key, value any) bool {
+                session := key.(int64)
+                info := value.(*mproxy.ConnectionInfo)
+
+                // 垃圾回收：已关闭且超过保留时间，物理删除
+                if info.Status == "Closed" && now.Sub(info.EndTime) > tombstoneRetention {
+                    h.proxy.Connections.Delete(session)
+                    return true
+                }
+
+                // 收集连接数据（包含 status 字段）
+                connData := map[string]any{
+                    "id":        info.Session,
+                    "parentId":  info.ParentSess,
+                    "host":      info.Host,
+                    "method":    info.Method,
+                    "url":       info.URL,
+                    "remote":    info.RemoteAddr,
+                    "protocol":  info.Protocol,
+                    "startTime": info.StartTime,
+                    "status":    info.Status,
+                }
+                // ... 流量字段 ...
+                connections = append(connections, connData)
+                return true
+            })
+
+            h.broadcastToTopic("connections", map[string]any{
+                "type": "connections",
+                "data": connections,
+            })
+        }
+    }()
+}
 ```
 
-### 功能测试
+---
 
-1. **隧道模式流量统计**：
-   - 启动代理，发起 HTTPS CONNECT 请求（非 MITM 模式）
-   - 通过 WebSocket 订阅连接信息
-   - 验证 `up` 和 `down` 实时更新
-   - 验证日志输出正确的流量统计
+## 关键文件清单
 
-2. **MITM 模式流量统计**：
-   - 发起 HTTPS CONNECT 请求（MITM 模式）
-   - 验证子请求流量统计正常
-   - 验证不影响现有功能
-
-3. **HTTP 模式流量统计**：
-   - 发起 HTTP 请求
-   - 验证流量统计功能不受影响
-
-### 回归测试
-
-| 功能点                | 预期结果               |
-| --------------------- | ---------------------- |
-| HTTP 代理流量统计     | 正常工作               |
-| HTTPS-Tunnel 流量统计 | 正常工作，修复原有问题 |
-| HTTPS-MITM 流量统计   | 正常工作，无副作用     |
-| WebSocket 连接推送    | 正常显示所有模式流量   |
-| 全局流量统计          | 累加正确               |
+| 文件                    | 修改内容                       |
+| ----------------------- | ------------------------------ |
+| `mproxy/connections.go` | 添加 Status/EndTime 字段和方法 |
+| `mproxy/http.go`        | 1处 Store + 2处 Delete 修改    |
+| `mproxy/https.go`       | 4处 Store + 4处 Delete 修改    |
+| `mproxy/actions.go`     | 2处 Delete 修改                |
+| `proxysocket/hub.go`    | 推送器 GC 逻辑和 status 字段   |
 
 ---
 
-## 关键修改点总结
+## 验证方法
 
-| 文件                | 行号范围                       | 修改内容                             |
-| ------------------- | ------------------------------ | ------------------------------------ |
-| `connections.go`    | ConnectionInfo 结构体          | 新增 `TunnelUp`、`TunnelDown` 字段   |
-| `tunnel_traffic.go` | 结构体 + 构造函数 + Read/Write | 新增 `connInfo` 关联，更新原子计数器 |
-| `https.go`          | 197, 200-211, 259-284          | 删除外部变量，重构注册逻辑           |
-| `hub.go`            | 110-116                        | 修改流量读取逻辑                     |
+1. 启动代理服务器：`go run main.go -v`
+2. 发起短请求：`curl -x localhost:8080 http://example.com`
+3. 观察 WebSocket 推送：
+   - 短连接应以 `"status": "Closed"` 出现
+   - 3 秒后从列表消失（物理删除）
+4. 验证长连接流量统计仍然正确
+
+## 前端兼容性
+
+- JSON 新增 `status` 字段（"Active" 或 "Closed"）
+- 可选：前端对 Closed 状态的连接显示灰色背景
