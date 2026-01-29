@@ -9,7 +9,6 @@ import (
 	"io"
 	"net"
 	"net/http"
-	"net/http/httputil"
 	"net/url"
 	"proxy_man/http1parser"
 	"proxy_man/signer"
@@ -437,18 +436,21 @@ func (proxy *CoreHttpServer) MyHttpsHandle(w http.ResponseWriter, r *http.Reques
 					resp.Header.Set("Connection", "close")
 				}
 				 
-				// 使用 httputil.DumpResponse 获取完整头部（包含状态行）
-				headerBytes, err := httputil.DumpResponse(resp, false)
-				if err != nil {
-					ctxt.WarnP("httpMItm DumpResponse error: %v", err)
-					httpError(connFromClinet, ctxt, err)
+				// 必须手动写回响应头，使用httputil直接取响应头不可控，会和自定义的响应头冲突
+				text := resp.Status
+				statusCode := strconv.Itoa(resp.StatusCode) + " "
+				text = strings.TrimPrefix(text, statusCode)
+				// always use 1.1 to support chunked encoding
+				if _, err := io.WriteString(connFromClinet, "HTTP/1.1"+" "+statusCode+text+"\r\n"); err != nil {
+					ctxt.WarnP("Cannot write TLS response HTTP status from mitm'd client: %v", err)
 					return false
 				}
-
-				// 一次性写入头部
-				if _, err := connFromClinet.Write(headerBytes); err != nil {
-					ctxt.WarnP("httpMItm Cannot write HTTP response header: %v", err)
-					httpError(connFromClinet, ctxt, err)
+				if err := resp.Header.Write(connFromClinet); err != nil {
+					ctxt.WarnP("Cannot write TLS response header from mitm'd client: %v", err)
+					return false
+				}
+				if _, err = io.WriteString(connFromClinet, "\r\n"); err != nil {
+					ctxt.WarnP("Cannot write TLS response header end from mitm'd client: %v", err)
 					return false
 				}
 
@@ -624,18 +626,27 @@ func (proxy *CoreHttpServer) MyHttpsHandle(w http.ResponseWriter, r *http.Reques
 						resp.Header.Set("Connection", "close")
 					}
 
+					// 必须手动写回响应头，使用httputil直接取响应头不可控，会和自定义的响应头冲突
+					text := resp.Status
+					statusCode := strconv.Itoa(resp.StatusCode) + " "
+					text = strings.TrimPrefix(text, statusCode)
+					// always use 1.1 to support chunked encoding
+					if _, err := io.WriteString(tlsConn, "HTTP/1.1"+" "+statusCode+text+"\r\n"); err != nil {
+						ctxt.WarnP("Cannot write TLS response HTTP status from mitm'd client: %v", err)
+						return false
+					}
+					if err := resp.Header.Write(tlsConn); err != nil {
+						ctxt.WarnP("Cannot write TLS response header from mitm'd client: %v", err)
+						return false
+					}
+					if _, err = io.WriteString(tlsConn, "\r\n"); err != nil {
+						ctxt.WarnP("Cannot write TLS response header end from mitm'd client: %v", err)
+						return false
+					}
+
+
 					// 加密传输websocket响应体
 					if isWebsocket {
-						// websocket响应写回响应头
-						headerBytes, err := httputil.DumpResponse(resp, false)
-						if err != nil {
-							ctxt.WarnP("Cannot dump TLS response header: %v", err)
-							return false
-						}
-						if _, err := tlsConn.Write(headerBytes); err != nil {
-							ctxt.WarnP("Cannot write WebSocket response header: %v", err)
-							return false
-						}
 						ctxt.Log_P("Response looks like websocket upgrade.")
 						// According to resp.Body documentation:
 						// As of Go 1.12, the Body will also implement io.Writer
@@ -651,26 +662,6 @@ func (proxy *CoreHttpServer) MyHttpsHandle(w http.ResponseWriter, r *http.Reques
 						// by returning false here, the underlying connection will be closed
 						return false
 					}
-
-					// 普通响应写回响应头
-					//headerBytes, err := httputil.DumpResponse(resp, false)
-					text := resp.Status
-					statusCode := strconv.Itoa(resp.StatusCode) + " "
-					text = strings.TrimPrefix(text, statusCode)
-					// always use 1.1 to support chunked encoding
-					if _, err := io.WriteString(tlsConn, "HTTP/1.1"+" "+statusCode+text+"\r\n"); err != nil {
-						ctxt.WarnP("Cannot write TLS response HTTP status from mitm'd client: %v", err)
-						return false
-					}
-
-					// if err != nil {
-					// 	ctxt.WarnP("Cannot dump TLS response header: %v", err)
-					// 	return false
-					// }
-					// if _, err := tlsConn.Write(headerBytes); err != nil {
-					// 	ctxt.WarnP("Cannot write TLS response header from mitm'd client: %v", err)
-					// 	return false
-					// }
 
 					// 加密传输http body(区分chunked传输和普通传输)
 					if resp.Request.Method == http.MethodHead ||
