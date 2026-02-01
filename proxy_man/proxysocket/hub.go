@@ -3,7 +3,7 @@ package proxysocket
 import (
 	"encoding/json"
 	"time"
-	// "log"
+	"log"
 	"github.com/gorilla/websocket"
 	"proxy_man/mproxy"
 )
@@ -14,6 +14,7 @@ func (h *WebSocketHub) updateSubscription(sub *Subscription, msg map[string]any)
 		sub.Traffic = contains(topics, "traffic")
 		sub.Connections = contains(topics, "connections")
 		sub.Logs = contains(topics, "logs")
+		sub.MitmDetail = contains(topics, "mitm_detail")
 	}
 	if logLevel, ok := msg["logLevel"].(string); ok {
 		sub.LogLevel = logLevel
@@ -52,6 +53,8 @@ func (h *WebSocketHub) broadcastToTopic(topic string, msg any) {
 			shouldSend = sub.Traffic
 		case "connections":
 			shouldSend = sub.Connections
+		case "mitm_detail":
+			shouldSend = sub.MitmDetail
 		}
 
 		if shouldSend {
@@ -172,4 +175,16 @@ var logLevels = map[string]int{"DEBUG": 0, "INFO": 1, "WARN": 2, "ERROR": 3}
 
 func shouldSendLog(msgLevel, clientLevel string) bool {
 	return logLevels[msgLevel] >= logLevels[clientLevel]
+}
+
+// MITM Exchange 详细信息推送器（实时推送）
+func (h *WebSocketHub) StartMitmDetailPusher() {
+	go func() {
+		for exchange := range mproxy.GlobalExchangeChan {
+			h.broadcastToTopic("mitm_detail", map[string]any{
+				"type": "mitm_exchange",
+				"data": exchange,
+			})
+		}
+	}()
 }

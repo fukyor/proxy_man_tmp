@@ -366,6 +366,7 @@ func (proxy *CoreHttpServer) MyHttpsHandle(w http.ResponseWriter, r *http.Reques
 					TrafficCounter: &TrafficCounter{}, // 创建独立计数器
 					Session:        atomic.AddInt64(&proxy.sess, 1),
 				}
+				ctxt.StartCapture(tunnelSession) // 启动 MITM Exchange 捕获
 
 				// 注册连接
 				proxy.Connections.Store(ctxt.Session, &ConnectionInfo{
@@ -397,11 +398,15 @@ func (proxy *CoreHttpServer) MyHttpsHandle(w http.ResponseWriter, r *http.Reques
 				req.URL, err = url.Parse("http://" + r.Host + req.URL.String())
 
 				req, resp := proxy.filterRequest(req, ctxt)
+				
+				ctxt.CaptureRequest(req) // 捕获请求快照
+
 				if resp == nil {
 					if connRemoteSite == nil {
 						// 和target建立tcp连接
 						connRemoteSite, err = proxy.connectDial(ctxt, "tcp", host)
 						if err != nil {
+							ctxt.SetCaptureError(err) // 记录错误
 							ctxt.WarnP("http远程拨号失败Http MITM Error dialing to %s: %s", host, err.Error())
 							return false
 						}
@@ -414,6 +419,7 @@ func (proxy *CoreHttpServer) MyHttpsHandle(w http.ResponseWriter, r *http.Reques
 					}
 					// 向target发起请求
 					if err := req.Write(connRemoteSite); err != nil {
+						ctxt.SetCaptureError(err) // 记录错误
 						httpError(connFromClinet, ctxt, err)
 						return false
 					}
@@ -423,6 +429,7 @@ func (proxy *CoreHttpServer) MyHttpsHandle(w http.ResponseWriter, r *http.Reques
 						return http.ReadResponse(remote_res, req)
 					}()
 					if err != nil {
+						ctxt.SetCaptureError(err) // 记录错误
 						httpError(connFromClinet, ctxt, err)
 						return false
 					}
@@ -432,6 +439,9 @@ func (proxy *CoreHttpServer) MyHttpsHandle(w http.ResponseWriter, r *http.Reques
 				defer resp.Body.Close()
 
 				isWebsocket := isWebSocketHandshake(resp.Header)
+				if isWebsocket {
+					ctxt.SkipCapture() // WebSocket 跳过捕获
+				}
 				if !isWebsocket && !proxy.ConnectMaintain{
 					resp.Header.Set("Connection", "close")
 				}
@@ -527,11 +537,12 @@ func (proxy *CoreHttpServer) MyHttpsHandle(w http.ResponseWriter, r *http.Reques
 					Req:            req,
 					Session:        atomic.AddInt64(&proxy.sess, 1),
 					core_proxy:     proxy,
-					parCtx: 		topctx,	
+					parCtx: 		topctx,
 					UserData:       topctx.UserData, //如果用户在 HandleConnect 处理器中设置了 UserData 或 RoundTripper，则继承保留
 					RoundTripper:   topctx.RoundTripper,
 					TrafficCounter: &TrafficCounter{},
 				}
+				ctxt.StartCapture(tunnelSession) // 启动 MITM Exchange 捕获
 				if err != nil && !errors.Is(err, io.EOF) {
 					ctxt.WarnP("TlsConn解析http请求失败Cannot read TLS request client %v %v", r.Host, err)
 				}
@@ -574,8 +585,10 @@ func (proxy *CoreHttpServer) MyHttpsHandle(w http.ResponseWriter, r *http.Reques
 
 					// https已经解析成功，我们可以查看请求
 					req, resp := proxy.filterRequest(req, ctxt)
+					ctxt.CaptureRequest(req) // 捕获请求快照
 					if resp == nil {
 						if err != nil {
+							ctxt.SetCaptureError(err) // 记录错误
 							if req.URL != nil {
 								ctxt.WarnP("Illegal URL %s", "https://"+r.Host+req.URL.Path)
 							} else {
@@ -583,7 +596,7 @@ func (proxy *CoreHttpServer) MyHttpsHandle(w http.ResponseWriter, r *http.Reques
 							}
 							return false
 						}
-						
+
 						RemoveProxyHeaders(ctxt, req)
 
 						resp, err = func() (*http.Response, error) {
@@ -593,6 +606,7 @@ func (proxy *CoreHttpServer) MyHttpsHandle(w http.ResponseWriter, r *http.Reques
 							return ctxt.RoundTrip(req)
 						}()
 						if err != nil {
+							ctxt.SetCaptureError(err) // 记录错误
 							ctxt.WarnP("Cannot read TLS response from mitm'd server %v", err)
 							return false
 						}
@@ -606,6 +620,9 @@ func (proxy *CoreHttpServer) MyHttpsHandle(w http.ResponseWriter, r *http.Reques
 
 					// 检查是否为 WebSocket
 					isWebsocket := isWebSocketHandshake(resp.Header)
+					if isWebsocket {
+						ctxt.SkipCapture() // WebSocket 跳过捕获
+					}
 					if isWebsocket || resp.Request.Method == http.MethodHead {
 						// don't change Content-Length for HEAD request
 					} else if (resp.StatusCode >= 100 && resp.StatusCode < 200) ||

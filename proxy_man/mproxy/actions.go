@@ -69,6 +69,8 @@ func AddTrafficMonitor(proxy *CoreHttpServer) {
 						ctx.TrafficCounter.resp_sum, ctx.TrafficCounter.resp_header, ctx.TrafficCounter.resp_body,
 						ctx.TrafficCounter.total, ctx.parCtx.TrafficCounter.req_sum, ctx.parCtx.TrafficCounter.resp_sum,
 						ctx.parCtx.TrafficCounter.total, ctx.Req.Method, ctx.Req.URL.String(), resp.Status)
+
+					ctx.SendExchange() // 触发 MITM Exchange 发送
 				},
 			}
 		return resp

@@ -89,6 +89,25 @@ import { RouterLink, RouterView } from 'vue-router'
           </svg>
           <span>日志</span>
         </RouterLink>
+
+        <RouterLink to="/dashboard/mitm" class="nav-item" active-class="active">
+          <!-- Icon for MITM -->
+          <svg
+            width="18"
+            height="18"
+            viewBox="0 0 24 24"
+            fill="none"
+            stroke="currentColor"
+            stroke-width="2"
+            stroke-linecap="round"
+            stroke-linejoin="round"
+          >
+            <path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"></path>
+            <path d="M12 8v4"></path>
+            <path d="M12 16h.01"></path>
+          </svg>
+          <span>MITM</span>
+        </RouterLink>
       </nav>
     </aside>
 

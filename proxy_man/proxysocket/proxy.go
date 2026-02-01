@@ -30,6 +30,7 @@ type Subscription struct {
 	Connections bool
 	Logs        bool
 	LogLevel    string
+	MitmDetail  bool       // MITM Exchange 详细信息
 	writeMu     sync.Mutex // 保护 WebSocket 写操作
 }
 
@@ -65,6 +66,7 @@ func (ws *WebsocketServer) StartControlServer() bool {
 	hub.StartTrafficPusher()
 	hub.StartConnectionPusher()
 	hub.StartLogPusher()
+	hub.StartMitmDetailPusher()
 
 	var err error
 	go func(){
