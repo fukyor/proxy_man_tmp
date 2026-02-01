@@ -21,18 +21,18 @@ type HttpExchange struct {
 }
 
 type RequestSnapshot struct {
-	Method   string              `json:"method"`
-	URL      string              `json:"url"`
-	Host     string              `json:"host"`
-	Header   map[string][]string `json:"header"`
-	BodySize int64               `json:"bodySize"`
+	Method  string              `json:"method"`
+	URL     string              `json:"url"`
+	Host    string              `json:"host"`
+	Header  map[string][]string `json:"header"`
+	SumSize int64               `json:"sumSize"`
 }
 
 type ResponseSnapshot struct {
 	StatusCode int                 `json:"statusCode"`
 	Status     string              `json:"status"`
 	Header     map[string][]string `json:"header"`
-	BodySize   int64               `json:"bodySize"`
+	SumSize    int64               `json:"sumSize"`
 }
 
 var GlobalExchangeChan = make(chan *HttpExchange, 1000)
@@ -102,9 +102,9 @@ func (ctx *Pcontext) SendExchange() {
 		Duration:  time.Since(cap.startTime).Milliseconds(),
 	}
 
-	// 从 TrafficCounter 读取 body 大小
+	// 从 TrafficCounter 读取请求总大小（头部+Body）
 	if ctx.TrafficCounter != nil {
-		exchange.Request.BodySize = ctx.TrafficCounter.req_body
+		exchange.Request.SumSize = ctx.TrafficCounter.req_sum
 	}
 
 	// 从 ctx.Resp 读取响应信息
@@ -115,7 +115,7 @@ func (ctx *Pcontext) SendExchange() {
 			Header:     cloneHeader(ctx.Resp.Header),
 		}
 		if ctx.TrafficCounter != nil {
-			exchange.Response.BodySize = ctx.TrafficCounter.resp_body
+			exchange.Response.SumSize = ctx.TrafficCounter.resp_sum
 		}
 	}
 

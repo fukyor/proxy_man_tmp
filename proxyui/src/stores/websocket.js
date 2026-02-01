@@ -10,21 +10,25 @@ export const useWebSocketStore = defineStore('websocket', () => {
     traffic: true,
     connections: true,
     logs: true,
-    logLevel: 'INFO'
+    logLevel: 'INFO',
+    mitm: true
   })
 
   // ==================== 数据 ====================
   const trafficHistory = ref([])  // 最近 60 秒流量历史
   const connections = ref([])      // 当前连接列表
   const logs = ref([])            // 日志列表
+  const mitmExchanges = ref([])   // MITM 交换记录
 
   const MAX_HISTORY = 60
   const MAX_LOGS = 500
+  const MAX_MITM_EXCHANGES = 1000
 
   // ==================== 订阅者回调 ====================
   const trafficSubscribers = ref(new Set())
   const connectionsSubscribers = ref(new Set())
   const logsSubscribers = ref(new Set())
+  const mitmSubscribers = ref(new Set())
 
   // ==================== 连接管理 ====================
 
@@ -90,7 +94,8 @@ export const useWebSocketStore = defineStore('websocket', () => {
       topics: [
         subscriptions.value.traffic && 'traffic',
         subscriptions.value.connections && 'connections',
-        subscriptions.value.logs && 'logs'
+        subscriptions.value.logs && 'logs',
+        subscriptions.value.mitm && 'mitm_detail'
       ].filter(Boolean),
       logLevel: subscriptions.value.logLevel
     }))
@@ -131,6 +136,9 @@ export const useWebSocketStore = defineStore('websocket', () => {
       case 'log':
         handleLog(msg.data)
         break
+      case 'mitm_exchange':
+        handleMITMExchange(msg.data)
+        break
     }
   }
 
@@ -154,7 +162,7 @@ export const useWebSocketStore = defineStore('websocket', () => {
    * @param {Array} data - 连接列表
    */
   function handleConnections(data) {
-    console.log(JSON.stringify(data, null, 2));
+    //console.log(JSON.stringify(data, null, 2));
     // 通知所有订阅者，订阅者就是不同的组件，它们把回调函数预先注册到trafficSubscribers
     connectionsSubscribers.value.forEach(cb => cb(data))
   }
@@ -171,6 +179,46 @@ export const useWebSocketStore = defineStore('websocket', () => {
     }
     // 通知所有订阅者
     logsSubscribers.value.forEach(cb => cb(item))
+  }
+
+  /**
+   * 处理 MITM 交换数据
+   * @param {Object} data - MITM 交换数据
+   */
+  function handleMITMExchange(data) {
+    console.log(JSON.stringify(data, null, 2));
+    const exchange = {
+      // 元数据
+      id: data.id,
+      sessionId: data.sessionId,
+      parentId: data.parentId,
+      time: data.time,
+      duration: data.duration,
+      error: data.error || '',
+
+      // 扁平化请求字段
+      method: data.request?.method || '',
+      url: data.request?.url || '',
+      host: data.request?.host || '',
+      requestHeaders: data.request?.header || {},
+      requestSize: data.request?.sumSize || 0,
+
+      // 扁平化响应字段
+      statusCode: data.response?.statusCode || 0,
+      status: data.response?.status || '',
+      responseHeaders: data.response?.header || {},
+      responseSize: data.response?.sumSize || 0,
+
+      // 衍生属性
+      hasResponse: !!(data.response && data.response.statusCode),
+      hasError: !!data.error
+    }
+
+    mitmExchanges.value.push(exchange)
+    if (mitmExchanges.value.length > MAX_MITM_EXCHANGES) {
+      mitmExchanges.value.shift()
+    }
+    mitmSubscribers.value.forEach(cb => cb(exchange))
   }
 
   // ==================== 订阅方法 ====================
@@ -212,6 +260,23 @@ export const useWebSocketStore = defineStore('websocket', () => {
     logs.value = []
   }
 
+  /**
+   * 订阅 MITM 更新
+   * @param {Function} callback - 回调函数
+   * @returns {Function} 取消订阅函数
+   */
+  function subscribeMITM(callback) {
+    mitmSubscribers.value.add(callback)
+    return () => mitmSubscribers.value.delete(callback)
+  }
+
+  /**
+   * 清除所有 MITM 交换记录
+   */
+  function clearMitmExchanges() {
+    mitmExchanges.value = []
+  }
+
   // ==================== Return ====================
 
   return {
@@ -221,6 +286,7 @@ export const useWebSocketStore = defineStore('websocket', () => {
     trafficHistory,
     connections,
     logs,
+    mitmExchanges,
     connect,
     disconnect,
     updateSubscriptions,
@@ -228,6 +294,8 @@ export const useWebSocketStore = defineStore('websocket', () => {
     subscribeTraffic,
     subscribeConnections,
     subscribeLogs,
-    clearLogs
+    clearLogs,
+    subscribeMITM,
+    clearMitmExchanges
   }
 })

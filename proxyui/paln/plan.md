@@ -1,229 +1,293 @@
-# 连接层级显示与活跃连接过滤实施方案
+# MITM 中间人代理界面设计方案
 
-## 需求概述
+## 核心理念
 
-1. **Connections 页面**：实现父子连接的层级折叠显示，显示所有连接（不过滤 status）
-2. **Overview 页面**：仅显示活跃（status=Active）的子节点连接，不显示父节点
+**保证能够完全清晰地显示中间人解密的数据** - 即后端发送的完整 HTTP 交换记录。
 
 ---
 
-## 一、数据结构设计
+## 一、界面布局
 
-### 1.1 Store 层（保持不变）
-
-`src/stores/websocket.js` 中的 `connections` 继续存储后端推送的扁平化数据：
-
-```javascript
-connections: [
-  { id: 1, parentId: 0, status: "Active", host: "...", up: 1024, down: 2048, ... },
-  { id: 2, parentId: 1, status: "Closed", host: "...", up: 512, down: 1024, ... }
-]
+```
+┌─────────────────────────────────────────────────────────┐
+│  侧边栏              主内容区                           │
+│  ┌────────┐        ┌───────────────────────────────┐   │
+│  │ 概览   │        │  MITM 中间人代理              │   │
+│  │详细连接│        │                               │   │
+│  │ 日志   │        │  ┌─────────────────────────┐  │   │
+│  │ MITM ✓ │        │  │ 搜索栏                 │  │   │
+│  └────────┘        │  │ [搜索框]               │  │   │
+│                    │  └─────────────────────────┘  │   │
+│                    │  ┌─────────────────────────┐  │   │
+│                    │  │ HTTP交换记录表格        │  │   │
+│                    │  │ (可排序、可滚动)        │  │   │
+│                    │  └─────────────────────────┘  │   │
+│                    └───────────────────────────────┘   │
+└─────────────────────────────────────────────────────────┘
 ```
 
-### 1.2 Connections.vue ViewModel
+### 两大区域
 
-**扁平转树形结构**：
+| 区域       | 说明                       | 样式参考                |
+| ---------- | -------------------------- | ----------------------- |
+| **搜索栏** | 搜索框，支持多字段过滤     | Connections.vue:385-400 |
+| **表格区** | HTTP交换记录列表（可排序） | Connections.vue:423-630 |
 
-```javascript
+---
+
+## 二、表格列设计
+
+| 列名   | 数据源                | 可排序 | 展示方式                          |
+| ------ | --------------------- | ------ | --------------------------------- |
+| ID     | `data.id`             | ✓      | 数值                              |
+| 会话ID | `data.sessionId`      | ✓      | 数值                              |
+| 父ID   | `data.parentId`       | ✓      | 数值（0或null显示"-"）            |
+| 时间   | `data.time`           | ✓      | 格式化 `YYYY-MM-DD HH:mm:ss`      |
+| 方法   | `request.method`      | ✓      | 徽章样式（GET/POST等）            |
+| URL    | `request.url`         | ✗      | 文本（可截断，hover显示完整）     |
+| Host   | `request.host`        | ✓      | 文本                              |
+| 状态码 | `response.statusCode` | ✓      | 徽章样式（无响应显示"-"）         |
+| 时长   | `data.duration`       | ✓      | `150ms` / `1.5s`                  |
+| 上传   | `request.sumSize`    | ✓      | 格式化字节 `1.23 KB`              |
+| 下载   | `response.sumSize`   | ✓      | 格式化字节 `5.67 MB`              |
+| 错误   | `data.error`          | ✓      | 文本（空显示"-"，有错误红色高亮） |
+
+### 状态码徽章配色
+
+| 状态码范围     | 背景色                     | 文字色    |
+| -------------- | -------------------------- | --------- |
+| 2xx 成功       | `rgba(40, 167, 69, 0.2)`   | `#28a745` |
+| 3xx 重定向     | `rgba(0, 123, 255, 0.2)`   | `#007bff` |
+| 4xx 客户端错误 | `rgba(255, 193, 7, 0.2)`   | `#ffc107` |
+| 5xx 服务器错误 | `rgba(220, 53, 69, 0.2)`   | `#dc3545` |
+| 无响应         | `rgba(108, 117, 125, 0.2)` | `#6c757d` |
+
+### 错误列样式
+
+| 条件               | 样式                                 |
+| ------------------ | ------------------------------------ |
+| 无错误（空字符串） | 灰色文本 `"-"`                       |
+| 有错误             | 红色高亮 `#dc3545`，显示完整错误信息 |
+
+---
+
+## 三、数据结构设计
+
+### 后端接口格式
+
+```json
 {
-  rootIds: [1, 3, 5],        // parentId === 0 的节点 id 列表
-  childrenMap: {
-    1: [2, 3],                // id: 1 的子节点 id 列表
-    3: [4],                   // id: 3 的子节点 id 列表
-    // ...
+  "type": "mitm_exchange",
+  "data": {
+    "id": 42,
+    "sessionId": 156,
+    "parentId": 150,
+    "time": 1706500000000,
+    "duration": 150,
+    "error": "",
+    "request": {
+      "method": "GET",
+      "url": "https://example.com/api/users",
+      "host": "example.com",
+      "header": {
+        "User-Agent": ["Mozilla/5.0..."],
+        "Accept": ["application/json"]
+      },
+      "sumSize": 0
+    },
+    "response": {
+      "statusCode": 200,
+      "status": "200 OK",
+      "header": {
+        "Content-Type": ["application/json"]
+      },
+      "sumSize": 1234
+    }
   }
 }
 ```
 
-**展开状态管理**：
+### 订阅主题
 
 ```javascript
+// WebSocket 订阅请求
 {
-  expandedIds: Set([1, 3])   // 存储已展开的父节点 id（独立于数据源）
+  "action": "subscribe",
+  "topics": ["mitm_detail"]  // 注意：主题名称是 mitm_detail
 }
 ```
 
-### 1.3 Overview.vue ViewModel
+### 前端存储结构
 
 ```javascript
+// websocket.js 新增状态
+const mitmExchanges = ref([])          // MITM 交换记录列表
+const mitmSubscribers = ref(new Set()) // MITM 订阅者回调
+const MAX_MITM_EXCHANGES = 1000        // 最大存储条数
+```
+
+### 数据标准化（推荐）
+
+后端数据扁平化后便于快速访问和显示：
+
+```javascript
+// 标准化后的单条记录
 {
-  activeConnections: [       // 过滤后的活跃子节点连接
-    { id: 2, parentId: 1, status: "Active", ... }
-  ]
+  id: 42,
+  sessionId: 156,
+  parentId: 150,
+  time: 1706500000000,
+  duration: 150,
+  error: "",
+
+  // 请求相关
+  method: "GET",
+  url: "https://example.com/api/users",
+  host: "example.com",
+  requestHeaders: {"User-Agent": ["Mozilla/5.0..."], "Accept": ["application/json"]},
+  requestSize: 0,
+
+  // 响应相关
+  statusCode: 200,
+  status: "200 OK",
+  responseHeaders: {"Content-Type": ["application/json"]},
+  responseSize: 1234,
+
+  // 衍生属性
+  hasResponse: true,
+  hasError: false
 }
 ```
 
 ---
 
-## 二、Connections.vue 修改方案
+## 四、WebSocket 订阅机制扩展
 
-### 2.1 修改文件
+### 需要修改的文件
 
-`src/views/Connections.vue`
+**`src/stores/websocket.js`**
 
-### 2.2 数据层修改
+| 修改点              | 位置        | 内容                                                     |
+| ------------------- | ----------- | -------------------------------------------------------- |
+| 新增状态            | 第19行后    | `mitmExchanges`, `mitmSubscribers`, `MAX_MITM_EXCHANGES` |
+| 更新订阅            | 第9-14行    | subscriptions 添加 `mitm: true`                          |
+| 更新subscribe()     | 第85-96行   | topics 添加 `'mitm_detail'`                              |
+| 更新handleMessage() | 第123-135行 | 添加 `case 'mitm_exchange'` 分支                         |
+| 新增函数            | 第175行后   | `handleMITMExchange(data)` 处理数据                      |
+| 新增函数            | 第207行后   | `subscribeMITM(callback)` 订阅方法                       |
+| 更新导出            | 第217-232行 | 添加 `mitmExchanges`, `subscribeMITM`                    |
 
-| 位置          | 修改内容                                                     |
-| ------------- | ------------------------------------------------------------ |
-| 第 119 行     | `const connections = ref([])` 改为 `const flatConnections = ref([])` |
-| 第 176-178 行 | 删除 `updateConnections` 中的 `filter(conn => conn.parentId === 0)`，改为存储全量数据 |
-| 新增 computed | `rootIds` - 根节点 id 数组                                   |
-| 新增 computed | `childrenMap` - 子节点映射表                                 |
-| 新增 computed | `flattenedConnections` - 用于渲染的扁平化列表（展开的子节点插入到父节点后） |
-| 新增 state    | `expandedIds = ref(new Set())` - 展开状态管理                |
+### WebSocket 消息处理流程
 
-**核心数据转换逻辑**：
+```
+后端推送 { type: "mitm_exchange", data: {...} }
+    ↓
+handleMessage(msg) 识别类型
+    ↓
+handleMITMExchange(data) 标准化并存储
+    ↓
+mitmExchanges.push(exchange) 添加到列表
+    ↓
+mitmSubscribers.forEach(cb) 通知订阅者
+    ↓
+组件重新渲染
+```
+
+### 关键实现点
 
 ```javascript
-// 构建树形结构
-const rootIds = computed(() => {
-  return flatConnections.value
-    .filter(c => c.parentId === 0)
-    .map(c => c.id)
-})
+// handleMITMExchange 函数核心逻辑
+function handleMITMExchange(data) {
+  const exchange = {
+    ...data,
+    // 扁平化 request
+    method: data.request?.method,
+    url: data.request?.url,
+    host: data.request?.host,
+    requestHeaders: data.request?.header || {},
+    requestSize: data.request?.sumSize || 0,
 
-const childrenMap = computed(() => {
-  const map = {}
-  flatConnections.value.forEach(conn => {
-    if (conn.parentId !== 0) {
-      if (!map[conn.parentId]) map[conn.parentId] = []
-      map[conn.parentId].push(conn)
-    }
-  })
-  return map
-})
+    // 扁平化 response
+    statusCode: data.response?.statusCode,
+    status: data.response?.status,
+    responseHeaders: data.response?.header || {},
+    responseSize: data.response?.sumSize || 0,
 
-// 展开搜索匹配的父节点
-const expandSearchResults = (query) => {
-  if (!query) return
-  const lowerQuery = query.toLowerCase()
-  flatConnections.value.forEach(conn => {
-    if ((conn.host?.toLowerCase().includes(lowerQuery) ||
-         conn.url?.toLowerCase().includes(lowerQuery)) &&
-        conn.parentId !== 0) {
-      expandedIds.value.add(conn.parentId)
-    }
-  })
-}
-```
+    // 衍生属性
+    hasResponse: !!(data.response && data.response.statusCode),
+    hasError: !!data.error
+  }
 
-### 2.3 模板层修改
+  mitmExchanges.value.push(exchange)
 
-**表头**：在 ID 列添加展开/收起图标占位
-**表格主体**：使用递归或两层 v-for 渲染
+  // 限制最大数量
+  if (mitmExchanges.value.length > MAX_MITM_EXCHANGES) {
+    mitmExchanges.value.shift()
+  }
 
-| 位置         | 修改内容                                                     |
-| ------------ | ------------------------------------------------------------ |
-| 第 88 行     | `v-for="conn in sortedConnections"` 改为 `v-for="item in flattenedConnections"` |
-| 第 89-104 行 | 修改渲染逻辑，区分父行和子行                                 |
-
-**渲染逻辑**：
-
-```html
-<!-- 父行 -->
-<tr :class="{ 'parent-row': item.parentId === 0, 'child-row': item.parentId !== 0 }">
-  <td>
-    <span v-if="item.parentId === 0" @click="toggleExpand(item.id)" class="expand-icon">
-      {{ expandedIds.has(item.id) ? '▼' : '▶' }}
-    </span>
-    {{ item.id }}
-  </td>
-  <!-- 其他列... -->
-</tr>
-```
-
-### 2.4 样式层修改
-
-**新增样式**：
-
-```css
-.expand-icon {
-  cursor: pointer;
-  margin-right: 8px;
-  color: #cba376;
-}
-
-.child-row {
-  background: #222;
-}
-
-.child-row td:first-child {
-  padding-left: 40px;  /* 缩进 */
+  // 通知订阅者
+  mitmSubscribers.value.forEach(cb => cb(exchange))
 }
 ```
 
 ---
 
-## 三、Overview.vue 修改方案
+## 五、搜索功能设计
 
-### 3.1 修改文件
+### 搜索字段
 
-`src/views/Overview.vue`
+| 字段     | 数据源                | 说明            |
+| -------- | --------------------- | --------------- |
+| URL      | `request.url`         | 完整URL模糊匹配 |
+| Host     | `request.host`        | 主机名模糊匹配  |
+| 方法     | `request.method`      | GET/POST等      |
+| 状态码   | `response.statusCode` | 数字搜索        |
+| 会话ID   | `sessionId`           | 数字搜索        |
+| 错误信息 | `error`               | 错误文本匹配    |
 
-### 3.2 数据层修改
+### 搜索逻辑
 
-| 位置          | 修改内容                              |
-| ------------- | ------------------------------------- |
-| 第 170-172 行 | 修改 `updateConnections` 中的过滤逻辑 |
-
-**新的过滤逻辑**：
-
-```javascript
-// 过滤活跃状态的子节点连接
-const activeConnections = computed(() => {
-  return flatConnections.value.filter(conn =>
-    conn.parentId !== 0 && conn.status === 'Active'
-  )
-})
+```
+搜索输入 → 转小写
+    ↓
+遍历 mitmExchanges
+    ↓
+匹配任一字段 → 包含在结果
+    ↓
+返回过滤后列表
 ```
 
-### 3.3 模板层修改
+---
 
-| 位置      | 修改内容                                                     |
-| --------- | ------------------------------------------------------------ |
-| 第 46 行  | `v-for="conn in connections"` 改为 `v-for="conn in activeConnections"` |
-| 第 171 行 | 删除 `connections.value = data`，改为 `flatConnections.value = data` |
+## 六、需要修改的文件清单
+
+| 文件                      | 修改内容                                            | 优先级 |
+| ------------------------- | --------------------------------------------------- | ------ |
+| `src/stores/websocket.js` | 添加 MITM 状态、订阅机制（`mitm_detail`）、处理函数 | 🔴 高   |
+| `src/views/MITM.vue`      | 实现完整 MITM 界面组件（搜索+表格）                 | 🔴 高   |
+
+### 参考文件（无需修改）
+
+- `src/views/Connections.vue` - 样式和布局参考
+- `src/views/Logs.vue` - 过滤器设计参考
 
 ---
 
-## 四、关键文件清单
+## 七、实现验证
 
-| 文件路径                    | 修改类型 | 修改说明                              |
-| --------------------------- | -------- | ------------------------------------- |
-| `src/views/Connections.vue` | 重构     | 实现层级显示、展开/收起、搜索自动展开 |
-| `src/views/Overview.vue`    | 简单修改 | 添加活跃状态过滤                      |
-
----
-
-## 五、验证方案
-
-### 5.1 功能验证
-
-1. **Connections 页面**：
-   - 父节点显示展开/收起图标
-   - 点击图标切换子节点显示
-   - 搜索子节点时自动展开父节点
-   - 子行有缩进和背景色区分
-   - 排序仅影响父节点顺序
-
-2. **Overview 页面**：
-   - 只显示 status 为 Active 的连接
-   - 连接状态变为 Closed 时自动消失
-
-### 5.2 测试步骤
+### 测试步骤
 
 1. 启动开发服务器：`npm run dev`
-2. 登录后切换到 Connections 页面
-3. 验证父子节点显示和折叠功能
-4. 测试搜索功能，确认匹配子节点时父节点自动展开
-5. 切换到 Overview 页面
-6. 验证仅显示活跃连接
-7. 等待连接状态变化，验证自动过滤
+2. 登录后导航到 MITM 页面
+3. 验证表格正确显示 HTTP 交换记录（包含所有字段）
+4. 输入搜索关键词，验证过滤功能（URL、Host、方法、状态码、会话ID、错误）
+5. 点击表头，验证排序功能
+6. 观察 WebSocket 实时更新，验证新记录自动添加
 
----
+### 预期效果
 
-## 六、注意事项
-
-1. **数据不污染**：所有 UI 状态（expandedIds）独立于数据源存储
-2. **性能考虑**：computed 层做转换，避免在模板中重复计算
-3. **后端兼容**：父节点流量已由后端聚合，前端无需额外处理
+- 界面风格与 Connections.vue 保持一致（暗色主题 + 金棕色主题色）
+- 完整清晰显示后端推送的 MITM 数据（请求+响应+元数据）
+- 有错误的请求红色高亮显示
+- 搜索和排序功能正常工作
+- 无控制台错误

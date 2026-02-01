@@ -36,7 +36,7 @@ func (h *WebSocketHub) sendTo(conn *websocket.Conn, sub *Subscription, msg any) 
 	sub.writeMu.Lock()
 	defer sub.writeMu.Unlock()
 	data, _ := json.Marshal(msg)
-	//log.Printf("%v", string(data))
+	log.Printf("%v", string(data))
 	conn.WriteMessage(websocket.TextMessage, data)
 }
 

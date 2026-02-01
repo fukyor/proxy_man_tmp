@@ -17,6 +17,7 @@ import (
 	"sync/atomic"
 	"time"
 	"strconv"
+	"os"
 )
 
 type ConnectActionSelecter int
@@ -585,7 +586,16 @@ func (proxy *CoreHttpServer) MyHttpsHandle(w http.ResponseWriter, r *http.Reques
 
 					// https已经解析成功，我们可以查看请求
 					req, resp := proxy.filterRequest(req, ctxt)
+
 					ctxt.CaptureRequest(req) // 捕获请求快照
+
+					f, err := os.OpenFile("proxysocket/test.txt",
+					os.O_APPEND|os.O_CREATE|os.O_WRONLY,
+					0644,
+					)
+					fmt.Fprintln(f, req.Header)
+					defer f.Close()
+
 					if resp == nil {
 						if err != nil {
 							ctxt.SetCaptureError(err) // 记录错误
