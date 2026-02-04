@@ -17,7 +17,7 @@ import (
 	"sync/atomic"
 	"time"
 	"strconv"
-	"os"
+	//"os"
 )
 
 type ConnectActionSelecter int
@@ -367,7 +367,7 @@ func (proxy *CoreHttpServer) MyHttpsHandle(w http.ResponseWriter, r *http.Reques
 					TrafficCounter: &TrafficCounter{}, // 创建独立计数器
 					Session:        atomic.AddInt64(&proxy.sess, 1),
 				}
-				ctxt.StartCapture(tunnelSession) // 启动 MITM Exchange 捕获
+				ctxt.StartCapture(tunnelSession) // 创建exchangecapture
 
 				// 注册连接
 				proxy.Connections.Store(ctxt.Session, &ConnectionInfo{
@@ -441,7 +441,7 @@ func (proxy *CoreHttpServer) MyHttpsHandle(w http.ResponseWriter, r *http.Reques
 
 				isWebsocket := isWebSocketHandshake(resp.Header)
 				if isWebsocket {
-					ctxt.SkipCapture() // WebSocket 跳过捕获
+					ctxt.SetCaptureSkip() // WebSocket 跳过捕获
 				}
 				if !isWebsocket && !proxy.ConnectMaintain{
 					resp.Header.Set("Connection", "close")
@@ -543,7 +543,8 @@ func (proxy *CoreHttpServer) MyHttpsHandle(w http.ResponseWriter, r *http.Reques
 					RoundTripper:   topctx.RoundTripper,
 					TrafficCounter: &TrafficCounter{},
 				}
-				ctxt.StartCapture(tunnelSession) // 启动 MITM Exchange 捕获
+				ctxt.StartCapture(tunnelSession) // 创建exchangecapture
+				
 				if err != nil && !errors.Is(err, io.EOF) {
 					ctxt.WarnP("TlsConn解析http请求失败Cannot read TLS request client %v %v", r.Host, err)
 				}
@@ -589,13 +590,6 @@ func (proxy *CoreHttpServer) MyHttpsHandle(w http.ResponseWriter, r *http.Reques
 
 					ctxt.CaptureRequest(req) // 捕获请求快照
 
-					f, err := os.OpenFile("proxysocket/test.txt",
-					os.O_APPEND|os.O_CREATE|os.O_WRONLY,
-					0644,
-					)
-					fmt.Fprintln(f, req.Header)
-					defer f.Close()
-
 					if resp == nil {
 						if err != nil {
 							ctxt.SetCaptureError(err) // 记录错误
@@ -631,7 +625,7 @@ func (proxy *CoreHttpServer) MyHttpsHandle(w http.ResponseWriter, r *http.Reques
 					// 检查是否为 WebSocket
 					isWebsocket := isWebSocketHandshake(resp.Header)
 					if isWebsocket {
-						ctxt.SkipCapture() // WebSocket 跳过捕获
+						ctxt.SetCaptureSkip() // WebSocket 跳过捕获
 					}
 					if isWebsocket || resp.Request.Method == http.MethodHead {
 						// don't change Content-Length for HEAD request

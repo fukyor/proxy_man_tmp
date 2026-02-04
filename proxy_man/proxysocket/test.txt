@@ -1,2 +1,0 @@
-map[Accept:[*/*] User-Agent:[curl/8.14.1]]
-map[Accept:[*/*] User-Agent:[curl/8.14.1]]

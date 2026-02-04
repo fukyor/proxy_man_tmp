@@ -54,6 +54,7 @@ func (ws *WebsocketServer) StartControlServer() bool {
 	hub = &WebSocketHub{proxy: ws.Proxy}
 	mux := http.NewServeMux()
 	mux.HandleFunc("/start", ws.loginHandler(ws.handleWebSocket))
+	mux.HandleFunc("/api/storage/download", HandleDownload) // MinIO 下载 API
 
 	corsMiddleware := cors.New(cors.Options{
 		AllowedOrigins:   []string{"*"},

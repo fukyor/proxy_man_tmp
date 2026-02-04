@@ -8,7 +8,7 @@ import (
 
 var exchangeIDCounter int64
 
-// HttpExchange 代表 MITM 模式下一次完整的 HTTP 请求-响应交互
+// HttpExchange 实际发送给客户端的数据
 type HttpExchange struct {
 	ID        int64            `json:"id"`
 	SessionID int64            `json:"sessionId"`
@@ -26,6 +26,12 @@ type RequestSnapshot struct {
 	Host    string              `json:"host"`
 	Header  map[string][]string `json:"header"`
 	SumSize int64               `json:"sumSize"`
+	// MinIO 存储信息
+	BodyKey      string `json:"bodyKey,omitempty"`      // MinIO 对象 Key
+	BodySize     int64  `json:"bodySize,omitempty"`     // Body 实际大小
+	BodyUploaded bool   `json:"bodyUploaded,omitempty"` // 是否成功上传
+	ContentType  string `json:"contentType,omitempty"`  // Content-Type
+	BodyError    string `json:"bodyError,omitempty"`    // MinIO 上传错误
 }
 
 type ResponseSnapshot struct {
@@ -33,20 +39,28 @@ type ResponseSnapshot struct {
 	Status     string              `json:"status"`
 	Header     map[string][]string `json:"header"`
 	SumSize    int64               `json:"sumSize"`
+	// MinIO 存储信息
+	BodyKey      string `json:"bodyKey,omitempty"`      // MinIO 对象 Key
+	BodySize     int64  `json:"bodySize,omitempty"`     // Body 实际大小
+	BodyUploaded bool   `json:"bodyUploaded,omitempty"` // 是否成功上传
+	ContentType  string `json:"contentType,omitempty"`  // Content-Type
+	BodyError    string `json:"bodyError,omitempty"`    // MinIO 上传错误
 }
 
 var GlobalExchangeChan = make(chan *HttpExchange, 1000)
 
 // ========== ExchangeCapture：封装捕获状态 ==========
 
-// ExchangeCapture 封装单次请求的捕获状态
+// ExchangeCapture 封装单次请求的捕获状态，作为做一个中间层，统一上报给HttpExchange
 type ExchangeCapture struct {
-	startTime time.Time
-	reqSnap   RequestSnapshot
-	parentID  int64
-	skip      bool
-	err       error
-	sent      bool // 防止重复发送
+	startTime   time.Time
+	reqSnap     RequestSnapshot
+	parentID    int64
+	skip        bool
+	err         error
+	sent        bool          // 防止重复发送
+	reqBodyCapture  *BodyCapture  // minio请求体捕获状态
+	respBodyCapture *BodyCapture  // minio响应体捕获状态
 }
 
 // StartCapture 初始化捕获，在 Pcontext 创建后调用
@@ -71,7 +85,7 @@ func (ctx *Pcontext) CaptureRequest(req *http.Request) {
 }
 
 // SkipCapture 标记跳过捕获（用于 WebSocket）
-func (ctx *Pcontext) SkipCapture() {
+func (ctx *Pcontext) SetCaptureSkip() {
 	if ctx.exchangeCapture != nil {
 		ctx.exchangeCapture.skip = true
 	}
@@ -107,6 +121,17 @@ func (ctx *Pcontext) SendExchange() {
 		exchange.Request.SumSize = ctx.TrafficCounter.req_sum
 	}
 
+	// 填充请求体 MinIO 信息
+	if cap.reqBodyCapture != nil {
+		exchange.Request.BodyKey = cap.reqBodyCapture.ObjectKey
+		exchange.Request.BodySize = cap.reqBodyCapture.Size
+		exchange.Request.BodyUploaded = cap.reqBodyCapture.Uploaded
+		exchange.Request.ContentType = cap.reqBodyCapture.ContentType
+		if cap.reqBodyCapture.Error != nil {
+			exchange.Request.BodyError = cap.reqBodyCapture.Error.Error()
+		}
+	}
+
 	// 从 ctx.Resp 读取响应信息
 	if ctx.Resp != nil {
 		exchange.Response = ResponseSnapshot{
@@ -116,6 +141,17 @@ func (ctx *Pcontext) SendExchange() {
 		}
 		if ctx.TrafficCounter != nil {
 			exchange.Response.SumSize = ctx.TrafficCounter.resp_sum
+		}
+	}
+
+	// 填充响应体 MinIO 信息
+	if cap.respBodyCapture != nil {
+		exchange.Response.BodyKey = cap.respBodyCapture.ObjectKey
+		exchange.Response.BodySize = cap.respBodyCapture.Size
+		exchange.Response.BodyUploaded = cap.respBodyCapture.Uploaded
+		exchange.Response.ContentType = cap.respBodyCapture.ContentType
+		if cap.respBodyCapture.Error != nil {
+			exchange.Response.BodyError = cap.respBodyCapture.Error.Error()
 		}
 	}
 
