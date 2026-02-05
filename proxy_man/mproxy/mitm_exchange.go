@@ -57,11 +57,11 @@ type ExchangeCapture struct {
 	startTime   time.Time
 	reqSnap     RequestSnapshot
 	parentID    int64
-	skipSend  bool
+	skipSend    bool
 	err         error
 	sent        bool          // 防止重复发送
-	reqBodyCapture  *myminio.BodyCapture  // minio请求体捕获状态
-	respBodyCapture *myminio.BodyCapture  // minio响应体捕获状态
+	reqBodyCapture  *myminio.BodyCapture  // minio上传状态捕获
+	respBodyCapture *myminio.BodyCapture  // minio上传状态捕获
 }
 
 // StartCapture 初始化捕获，在 Pcontext 创建后调用

@@ -7,7 +7,7 @@ import (
 	"time"
 )
 
-// 记录minio的上传状态
+// BodyCapture Body 捕获状态
 type BodyCapture struct {
 	ObjectKey   string // MinIO 对象 Key
 	Size        int64  // 上传后的实际大小
@@ -18,11 +18,11 @@ type BodyCapture struct {
 
 // bodyCaptReader 流式上传包装器
 type bodyCaptReader struct {
-	trafficReader   io.ReadCloser  // 内层 Reader（通常是流量统计层）
+	inner       io.ReadCloser  // 内层 Reader（通常是流量统计层）
 	pipeWriter  *io.PipeWriter // 用于向上传协程传输数据
-	capture     *BodyCapture   // 捕获状态
+	Capture     *BodyCapture   // 捕获状态
 	doneCh      chan struct{}  // 上传完成信号
-	skipCapture bool           // 是否跳过捕获
+	skipUpload bool           // 是否跳过捕获
 }
 
 // shouldSkipCapture 判断是否应该跳过捕获
@@ -50,32 +50,28 @@ func shouldSkipCapture(contentType string) bool {
 // 返回:
 //   - *bodyCaptReader: 包装后的 Reader
 //   - *BodyCapture: 捕获状态（nil 表示跳过捕获）
-func WrapBodyForCapture(inner io.ReadCloser, sessionID int64, bodyType, contentType string) (*bodyCaptReader, *BodyCapture) {
+func BuildBodyReader(inner io.ReadCloser, sessionID int64, bodyType, contentType string) (*bodyCaptReader) {
 	// 如果 MinIO 未启用或内容类型需要跳过，直接返回透传 Reader
 	if !IsEnabled() || shouldSkipCapture(contentType) {
-		return &bodyCaptReader{trafficReader: inner, skipCapture: true}, nil
-	}
-
-	// 初始化捕获状态
-	capture := &BodyCapture{
-		ObjectKey:   GetObjectKey(sessionID, bodyType),
-		ContentType: contentType,
+		return &bodyCaptReader{inner: inner, skipUpload: true}
 	}
 
 	// 创建 Pipe 用于数据流转
 	pr, pw := io.Pipe()
-
 	reader := &bodyCaptReader{
-		trafficReader:  inner,
+		inner:      inner,
 		pipeWriter: pw,
-		capture:    capture,
+		Capture:    &BodyCapture{
+						ObjectKey:   GetObjectKey(sessionID, bodyType),
+						ContentType: contentType,
+					},
 		doneCh:     make(chan struct{}),
 	}
 
 	// 启动上传协程
 	go reader.uploadToMinIO(pr)
 
-	return reader, capture
+	return reader
 }
 
 // uploadToMinIO 上传到 MinIO（在独立协程中运行）
@@ -88,27 +84,27 @@ func (r *bodyCaptReader) uploadToMinIO(pr *io.PipeReader) {
 	defer cancel()
 
 	// 执行上传
-	info, err := GlobalClient.PutObject(ctx, r.capture.ObjectKey, pr, r.capture.ContentType)
+	info, err := GlobalClient.PutObject(ctx, r.Capture.ObjectKey, pr, r.Capture.ContentType)
 	if err != nil {
-		r.capture.Error = err
+		r.Capture.Error = err
 		return
 	}
 
 	// 记录上传成功信息
-	r.capture.Size = info.Size
-	r.capture.Uploaded = true
+	r.Capture.Size = info.Size
+	r.Capture.Uploaded = true
 }
 
 // Read 实现 io.Reader 接口
 func (r *bodyCaptReader) Read(p []byte) (n int, err error) {
 	// 从内层 Reader 读取数据
-	n, err = r.trafficReader.Read(p)
+	n, err = r.inner.Read(p)
 
 	// 如果没有跳过捕获且读取到数据，写入 Pipe
-	if !r.skipCapture && n > 0 && r.pipeWriter != nil {
+	if !r.skipUpload && n > 0 && r.pipeWriter != nil {
 		if _, writeErr := r.pipeWriter.Write(p[:n]); writeErr != nil {
 			// 记录写入错误但不影响主流程
-			r.capture.Error = writeErr
+			r.Capture.Error = writeErr
 		}
 	}
 
@@ -128,5 +124,5 @@ func (r *bodyCaptReader) Close() error {
 	}
 
 	// 关闭内层 Reader
-	return r.trafficReader.Close()
+	return r.inner.Close()
 }

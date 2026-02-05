@@ -1,4 +1,4 @@
-package main
+package myminio
 
 import (
 	"encoding/json"
@@ -6,6 +6,7 @@ import (
 	"io"
 	"net/http"
 	"time"
+	"testing"
 )
 
 const (
@@ -19,40 +20,8 @@ type TestAPIResponse struct {
 	Data    any    `json:"data,omitempty"`
 }
 
-// TestDownloadAPI 测试下载 API 的各种场景
-func TestDownloadAPI() {
-	fmt.Println("========== 开始测试 /api/storage/download API ==========")
-	fmt.Println("测试服务器:", baseURL)
-	fmt.Println()
-
-	// 场景1: 缺少 key 参数
-	fmt.Println("--- 场景1: 缺少 key 参数 ---")
-	testMissingKey()
-
-	fmt.Println()
-
-	// 场景2: 空 key 参数
-	fmt.Println("--- 场景2: 空 key 参数 ---")
-	testEmptyKey()
-
-	fmt.Println()
-
-	// 场景3: MinIO 未启用（假设对象不存在时的行为）
-	fmt.Println("--- 场景3: 对象不存在 ---")
-	testObjectNotFound()
-
-	fmt.Println()
-
-	// 场景4: 有效 key（尝试常见的存储路径）
-	fmt.Println("--- 场景4: 测试常见存储路径 ---")
-	testValidKeys()
-
-	fmt.Println()
-	fmt.Println("========== 测试完成 ==========")
-}
-
 // testMissingKey 测试缺少 key 参数
-func testMissingKey() {
+func TestMissingKey(t *testing.T) {
 	url := baseURL + "/api/storage/download"
 	resp, err := http.Get(url)
 	if err != nil {
@@ -78,7 +47,7 @@ func testMissingKey() {
 }
 
 // testEmptyKey 测试空 key 参数
-func testEmptyKey() {
+func TestEmptyKey(t *testing.T) {
 	url := baseURL + "/api/storage/download?key="
 	resp, err := http.Get(url)
 	if err != nil {
@@ -104,7 +73,7 @@ func testEmptyKey() {
 }
 
 // testObjectNotFound 测试对象不存在
-func testObjectNotFound() {
+func TestObjectNotFound(t *testing.T) {
 	url := baseURL + "/api/storage/download?key=nonexistent/object/file"
 	resp, err := http.Get(url)
 	if err != nil {
@@ -130,7 +99,7 @@ func testObjectNotFound() {
 }
 
 // testValidKeys 测试有效的 key
-func testValidKeys() {
+func TestValidKeys(t *testing.T) {
 	// 生成今天的日期路径
 	today := time.Now().Format("2006-01-02")
 	testKeys := []string{
@@ -168,9 +137,4 @@ func testValidKeys() {
 		}
 		fmt.Println()
 	}
-}
-
-// main 函数
-func main() {
-	TestDownloadAPI()
 }
