@@ -7,6 +7,7 @@ import (
 	"proxy_man/myminio"
 	"proxy_man/mproxy"
 	"proxy_man/proxysocket"
+	_ "net/http/pprof"
 	// "net/http/httputil"
 	// "fmt"
 )
@@ -43,6 +44,14 @@ func main() {
 		myminio.GlobalClient = client
 		log.Printf("MinIO 存储已启用: %s/%s", minioConfig.Endpoint, minioConfig.Bucket)
 	}
+
+	// 我们监听 6060 端口，传 nil 表示使用默认的 DefaultServeMux (里面已经有了 pprof)
+	go func() {
+		log.Println("🔍 性能监控 (pprof) 服务已启动: http://localhost:6060/debug/pprof/")
+		if err := http.ListenAndServe(":6060", nil); err != nil {
+			log.Printf("pprof 启动失败: %v", err)
+		}
+	}()
 
 	// mproxy.PrintReqHeader(proxy)
 	// mproxy.PrintRespHeader(proxy)
