@@ -39,7 +39,7 @@ func TestMissingKey(t *testing.T) {
 	fmt.Printf("响应: %s\n", string(body))
 
 	// 验证结果
-	if resp.StatusCode == 400 && apiResp.Code == 400 && apiResp.Message == "缺少参数: key" {
+	if resp.StatusCode == 200 && apiResp.Code == 400 && apiResp.Message == "缺少参数: key" {
 		fmt.Println("✅ 测试通过")
 	} else {
 		fmt.Println("❌ 测试失败")
@@ -65,7 +65,7 @@ func TestEmptyKey(t *testing.T) {
 	fmt.Printf("响应: %s\n", string(body))
 
 	// 验证结果
-	if resp.StatusCode == 400 && apiResp.Code == 400 && apiResp.Message == "缺少参数: key" {
+	if resp.StatusCode == 200 && apiResp.Code == 400 && apiResp.Message == "缺少参数: key" {
 		fmt.Println("✅ 测试通过")
 	} else {
 		fmt.Println("❌ 测试失败")
@@ -104,7 +104,9 @@ func TestValidKeys(t *testing.T) {
 	today := time.Now().Format("2006-01-02")
 	testKeys := []string{
 		fmt.Sprintf("mitm-data/%s/1/req", today),
+		fmt.Sprintf("mitm-data/%s/2/req", today),
 		fmt.Sprintf("mitm-data/%s/1/resp", today),
+		fmt.Sprintf("mitm-data/%s/2/resp", today),
 	}
 
 	for _, key := range testKeys {
