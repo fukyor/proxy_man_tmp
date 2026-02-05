@@ -134,8 +134,8 @@ func testValidKeys() {
 	// 生成今天的日期路径
 	today := time.Now().Format("2006-01-02")
 	testKeys := []string{
-		fmt.Sprintf("mitm-data/%s/2/req", today),
-		fmt.Sprintf("mitm-data/%s/2/resp", today),
+		fmt.Sprintf("mitm-data/%s/1/req", today),
+		fmt.Sprintf("mitm-data/%s/1/resp", today),
 	}
 
 	for _, key := range testKeys {

@@ -57,7 +57,7 @@ type ExchangeCapture struct {
 	startTime   time.Time
 	reqSnap     RequestSnapshot
 	parentID    int64
-	skip        bool
+	skipSend  bool
 	err         error
 	sent        bool          // 防止重复发送
 	reqBodyCapture  *myminio.BodyCapture  // minio请求体捕获状态
@@ -88,7 +88,7 @@ func (ctx *Pcontext) CaptureRequest(req *http.Request) {
 // SkipCapture 标记跳过捕获（用于 WebSocket）
 func (ctx *Pcontext) SetCaptureSkip() {
 	if ctx.exchangeCapture != nil {
-		ctx.exchangeCapture.skip = true
+		ctx.exchangeCapture.skipSend = true
 	}
 }
 
@@ -103,7 +103,7 @@ func (ctx *Pcontext) SetCaptureError(err error) {
 // 这个方法会被 respBodyReader.onClose 触发
 func (ctx *Pcontext) SendExchange() {
 	cap := ctx.exchangeCapture
-	if cap == nil || cap.skip || cap.sent {
+	if cap == nil || cap.skipSend || cap.sent {
 		return
 	}
 	cap.sent = true
