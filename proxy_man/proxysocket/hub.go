@@ -1,6 +1,7 @@
 package proxysocket
 
 import (
+	"bytes"
 	"encoding/json"
 	"time"
 	"log"
@@ -35,9 +36,16 @@ func contains(slice []any, item string) bool {
 func (h *WebSocketHub) sendTo(conn *websocket.Conn, sub *Subscription, msg any) {
 	sub.writeMu.Lock()
 	defer sub.writeMu.Unlock()
-	data, _ := json.Marshal(msg)
-	log.Printf("%v", string(data))
-	conn.WriteMessage(websocket.TextMessage, data)
+
+	var buf bytes.Buffer
+	encoder := json.NewEncoder(&buf)
+	encoder.SetEscapeHTML(false)
+	if err := encoder.Encode(msg); err != nil {
+		return
+	}
+
+	log.Printf("%v", buf.String())
+	conn.WriteMessage(websocket.TextMessage, buf.Bytes())
 }
 
 // 广播到订阅指定主题的客户端

@@ -1,14 +1,13 @@
-package mproxy
+package myminio
 
 import (
 	"context"
 	"io"
-	"proxy_man/minio"
 	"strings"
 	"time"
 )
 
-// BodyCapture Body 捕获状态
+// 记录minio的上传状态
 type BodyCapture struct {
 	ObjectKey   string // MinIO 对象 Key
 	Size        int64  // 上传后的实际大小
@@ -19,7 +18,7 @@ type BodyCapture struct {
 
 // bodyCaptReader 流式上传包装器
 type bodyCaptReader struct {
-	inner       io.ReadCloser  // 内层 Reader（通常是流量统计层）
+	trafficReader   io.ReadCloser  // 内层 Reader（通常是流量统计层）
 	pipeWriter  *io.PipeWriter // 用于向上传协程传输数据
 	capture     *BodyCapture   // 捕获状态
 	doneCh      chan struct{}  // 上传完成信号
@@ -53,13 +52,13 @@ func shouldSkipCapture(contentType string) bool {
 //   - *BodyCapture: 捕获状态（nil 表示跳过捕获）
 func WrapBodyForCapture(inner io.ReadCloser, sessionID int64, bodyType, contentType string) (*bodyCaptReader, *BodyCapture) {
 	// 如果 MinIO 未启用或内容类型需要跳过，直接返回透传 Reader
-	if !minio.IsEnabled() || shouldSkipCapture(contentType) {
-		return &bodyCaptReader{inner: inner, skipCapture: true}, nil
+	if !IsEnabled() || shouldSkipCapture(contentType) {
+		return &bodyCaptReader{trafficReader: inner, skipCapture: true}, nil
 	}
 
 	// 初始化捕获状态
 	capture := &BodyCapture{
-		ObjectKey:   minio.GetObjectKey(sessionID, bodyType),
+		ObjectKey:   GetObjectKey(sessionID, bodyType),
 		ContentType: contentType,
 	}
 
@@ -67,7 +66,7 @@ func WrapBodyForCapture(inner io.ReadCloser, sessionID int64, bodyType, contentT
 	pr, pw := io.Pipe()
 
 	reader := &bodyCaptReader{
-		inner:      inner,
+		trafficReader:  inner,
 		pipeWriter: pw,
 		capture:    capture,
 		doneCh:     make(chan struct{}),
@@ -89,7 +88,7 @@ func (r *bodyCaptReader) uploadToMinIO(pr *io.PipeReader) {
 	defer cancel()
 
 	// 执行上传
-	info, err := minio.GlobalClient.PutObject(ctx, r.capture.ObjectKey, pr, r.capture.ContentType)
+	info, err := GlobalClient.PutObject(ctx, r.capture.ObjectKey, pr, r.capture.ContentType)
 	if err != nil {
 		r.capture.Error = err
 		return
@@ -103,7 +102,7 @@ func (r *bodyCaptReader) uploadToMinIO(pr *io.PipeReader) {
 // Read 实现 io.Reader 接口
 func (r *bodyCaptReader) Read(p []byte) (n int, err error) {
 	// 从内层 Reader 读取数据
-	n, err = r.inner.Read(p)
+	n, err = r.trafficReader.Read(p)
 
 	// 如果没有跳过捕获且读取到数据，写入 Pipe
 	if !r.skipCapture && n > 0 && r.pipeWriter != nil {
@@ -129,5 +128,5 @@ func (r *bodyCaptReader) Close() error {
 	}
 
 	// 关闭内层 Reader
-	return r.inner.Close()
+	return r.trafficReader.Close()
 }

@@ -1,9 +1,9 @@
-package proxysocket
+package myminio
 
 import (
 	"encoding/json"
+	"fmt"
 	"net/http"
-	"proxy_man/minio"
 	"strings"
 	"time"
 )
@@ -23,6 +23,13 @@ type DownloadData struct {
 	Size        int64  `json:"size"`        // 文件大小（字节）
 }
 
+// writeJSON 写入 JSON 响应（禁用 HTML 转义）
+func writeJSON(w http.ResponseWriter, v any) error {
+	encoder := json.NewEncoder(w)
+	encoder.SetEscapeHTML(false)
+	return encoder.Encode(v)
+}
+
 // HandleDownload 处理下载请求
 // GET /api/storage/download?key=mitm-data/2026-02-04/10086/req
 func HandleDownload(w http.ResponseWriter, r *http.Request) {
@@ -31,7 +38,7 @@ func HandleDownload(w http.ResponseWriter, r *http.Request) {
 	// 获取 ObjectKey 参数
 	objectKey := r.URL.Query().Get("key")
 	if objectKey == "" {
-		json.NewEncoder(w).Encode(APIResponse{
+		writeJSON(w, APIResponse{
 			Code:    400,
 			Message: "缺少参数: key",
 		})
@@ -39,8 +46,8 @@ func HandleDownload(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// 检查 MinIO 是否启用
-	if !minio.IsEnabled() {
-		json.NewEncoder(w).Encode(APIResponse{
+	if !IsEnabled() {
+		writeJSON(w, APIResponse{
 			Code:    503,
 			Message: "MinIO 存储未启用",
 		})
@@ -48,31 +55,38 @@ func HandleDownload(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// 检查对象是否存在
-	info, err := minio.GlobalClient.StatObject(objectKey)
+	info, err := GlobalClient.StatObject(objectKey)
 	if err != nil {
-		json.NewEncoder(w).Encode(APIResponse{
+		writeJSON(w, APIResponse{
 			Code:    404,
 			Message: "对象不存在",
 		})
 		return
 	}
 
-	// 生成预签名下载 URL（有效期 1 小时）
-	expiry := 1 * time.Hour
-	presignedURL, err := minio.GlobalClient.GetPresignedURL(objectKey, expiry)
+	// 1. 先提取文件名
+	filename, err := ExtractFilename(objectKey)
 	if err != nil {
-		json.NewEncoder(w).Encode(APIResponse{
+		writeJSON(w, APIResponse{
+			Code:    504,
+			Message: err.Error(),
+		})
+		return
+	}
+
+	// 2. 再生成预签名下载 URL（有效期 1 小时，传入 filename）
+	expiry := 1 * time.Hour
+	presignedURL, err := GlobalClient.GetPresignedURL(objectKey, expiry, filename)
+	if err != nil {
+		writeJSON(w, APIResponse{
 			Code:    500,
 			Message: "生成下载链接失败",
 		})
 		return
 	}
 
-	// 提取文件名
-	filename := extractFilename(objectKey)
-
 	// 返回成功响应
-	json.NewEncoder(w).Encode(APIResponse{
+	writeJSON(w, APIResponse{
 		Code:    0,
 		Message: "success",
 		Data: DownloadData{
@@ -84,15 +98,15 @@ func HandleDownload(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
-// extractFilename 从 ObjectKey 提取文件名
+// ExtractFilename 从 ObjectKey 提取文件名
 // 格式: mitm-data/2026-02-04/10086/req -> 10086_req.bin
-func extractFilename(key string) string {
+func ExtractFilename(key string) (string, error) {
 	parts := strings.Split(key, "/")
 	if len(parts) >= 2 {
 		// 倒数第二个是 SessionID，倒数第一个是 bodyType
 		sessionID := parts[len(parts)-2]
 		bodyType := parts[len(parts)-1]
-		return sessionID + "_" + bodyType + ".bin"
+		return sessionID + "_" + bodyType + ".bin", nil
 	}
-	return "body.bin"
+	return "", fmt.Errorf("字符串解析错误")
 }

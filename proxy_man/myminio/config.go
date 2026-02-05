@@ -1,4 +1,4 @@
-package minio
+package myminio
 
 import (
 	"context"
@@ -54,17 +54,4 @@ func NewClient(cfg Config) (*Client, error) {
 	}
 
 	return &Client{client: client, config: cfg}, nil
-}
-
-// IsEnabled 检查 MinIO 是否已启用
-func IsEnabled() bool {
-	return GlobalClient != nil && GlobalClient.config.Enabled
-}
-
-// GetObjectKey 生成对象存储的 Key
-// 格式: mitm-data/YYYY-MM-DD/SessionID/bodyType
-// 示例: mitm-data/2026-02-04/10086/req
-func GetObjectKey(sessionID int64, bodyType string) string {
-	date := time.Now().Format("2006-01-02")
-	return fmt.Sprintf("mitm-data/%s/%d/%s", date, sessionID, bodyType)
 }

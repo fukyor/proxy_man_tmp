@@ -4,7 +4,7 @@ import (
 	"flag"
 	"log"
 	"net/http"
-	"proxy_man/minio"
+	"proxy_man/myminio"
 	"proxy_man/mproxy"
 	"proxy_man/proxysocket"
 	// "net/http/httputil"
@@ -27,7 +27,7 @@ func main() {
 	proxy.Logger = mproxy.NewLogCollector(proxy.Logger)
 
 	// 初始化 MinIO
-	minioConfig := minio.Config{
+	minioConfig := myminio.Config{
 		Endpoint:        "127.0.0.1:9000",
 		AccessKeyID:     "root",
 		SecretAccessKey: "12345678",
@@ -35,12 +35,12 @@ func main() {
 		Bucket:          "bodydata",
 		Enabled:         true,
 	}
-	client, err := minio.NewClient(minioConfig)
+	client, err := myminio.NewClient(minioConfig)
 	if err != nil {
 		log.Printf("警告: MinIO 初始化失败: %v，Body 捕获功能将被禁用", err)
 		return
 	} else {
-		minio.GlobalClient = client
+		myminio.GlobalClient = client
 		log.Printf("MinIO 存储已启用: %s/%s", minioConfig.Endpoint, minioConfig.Bucket)
 	}
 

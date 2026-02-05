@@ -3,6 +3,7 @@ package mproxy
 import (
 	"net/http"
 	"sync/atomic"
+	"proxy_man/myminio"
 	"time"
 )
 
@@ -59,8 +60,8 @@ type ExchangeCapture struct {
 	skip        bool
 	err         error
 	sent        bool          // 防止重复发送
-	reqBodyCapture  *BodyCapture  // minio请求体捕获状态
-	respBodyCapture *BodyCapture  // minio响应体捕获状态
+	reqBodyCapture  *myminio.BodyCapture  // minio请求体捕获状态
+	respBodyCapture *myminio.BodyCapture  // minio响应体捕获状态
 }
 
 // StartCapture 初始化捕获，在 Pcontext 创建后调用

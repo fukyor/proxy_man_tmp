@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"net/http"
 	"net/http/httputil"
+	"proxy_man/myminio"
 	"strings"
 )
 
@@ -34,7 +35,7 @@ func AddTrafficMonitor(proxy *CoreHttpServer) {
 
 			// 第二层：MinIO 捕获（包装流量统计层）
 			contentType := req.Header.Get("Content-Type")
-			captReader, capture := WrapBodyForCapture(trafficReader, ctx.Session, "req", contentType)
+			captReader, capture := myminio.WrapBodyForCapture(trafficReader, ctx.Session, "req", contentType)
 			if ctx.exchangeCapture != nil {
 				ctx.exchangeCapture.reqBodyCapture = capture
 			}
@@ -87,7 +88,7 @@ func AddTrafficMonitor(proxy *CoreHttpServer) {
 
 		// 第二层：MinIO 捕获（包装流量统计层）
 		contentType := resp.Header.Get("Content-Type")
-		captReader, capture := WrapBodyForCapture(trafficReader, ctx.Session, "resp", contentType)
+		captReader, capture := myminio.WrapBodyForCapture(trafficReader, ctx.Session, "resp", contentType)
 		if ctx.exchangeCapture != nil {
 			ctx.exchangeCapture.respBodyCapture = capture
 		}
