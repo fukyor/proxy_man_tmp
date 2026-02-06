@@ -17,6 +17,15 @@ func (c *Client) PutObject(ctx context.Context, key string, reader io.Reader, co
 	return c.client.PutObject(ctx, c.config.Bucket, key, reader, -1, opts)
 }
 
+// PutObjectWithSize 上传对象到 MinIO（指定大小）
+// size >= 0 时直接流式上传，size < 0 时 SDK 会缓冲到内存
+func (c *Client) PutObjectWithSize(ctx context.Context, key string, reader io.Reader, size int64, contentType string) (minio.UploadInfo, error) {
+	opts := minio.PutObjectOptions{
+		ContentType: contentType,
+	}
+	return c.client.PutObject(ctx, c.config.Bucket, key, reader, size, opts)
+}
+
 // StatObject 获取对象信息
 func (c *Client) StatObject(key string) (minio.ObjectInfo, error) {
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)

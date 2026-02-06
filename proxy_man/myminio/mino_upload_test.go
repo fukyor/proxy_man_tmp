@@ -35,7 +35,7 @@ func TestBodyCapture_Streaming(t *testing.T) {
     body := io.NopCloser(bytes.NewReader([]byte("test body data")))
 
     // 创建流式上传 Reader
-    reader := BuildBodyReader(body, 1, "req", "text/plain")
+    reader := BuildBodyReader(body, 1, "req", "text/plain", -1)
 
     // 读取数据（会同时触发上传）
     data := make([]byte, 100)
@@ -56,7 +56,7 @@ func TestBodyCapture_EmptyBody(t *testing.T) {
     setUp()
     // 测试空 Body
     body := io.NopCloser(bytes.NewReader([]byte{}))
-       reader := BuildBodyReader(body, 2, "req", "text/plain")
+       reader := BuildBodyReader(body, 2, "req", "text/plain", -1)
 
     reader.Close()
 

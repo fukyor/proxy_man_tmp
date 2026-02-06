@@ -2,9 +2,13 @@ package myminio
 
 import (
 	"context"
+	"fmt"
 	"io"
+	"os"
 	"strings"
 	"time"
+
+	"github.com/minio/minio-go/v7"
 )
 
 // BodyCapture Body 捕获状态
@@ -18,18 +22,19 @@ type BodyCapture struct {
 
 // bodyCaptReader 流式上传包装器
 type bodyCaptReader struct {
-	inner       io.ReadCloser  // 内层 Reader（通常是流量统计层）
-	pipeWriter  *io.PipeWriter // 用于向上传协程传输数据
-	Capture     *BodyCapture   // 捕获状态
-	doneCh      chan struct{}  // 上传完成信号
-	skipUpload bool           // 是否跳过捕获
+	inner         io.ReadCloser  // 内层 Reader（通常是流量统计层）
+	pipeWriter    *io.PipeWriter // 用于向上传协程传输数据
+	Capture       *BodyCapture   // 捕获状态
+	doneCh        chan struct{}  // 上传完成信号
+	skipUpload    bool           // 是否跳过捕获
+	contentLength int64          // HTTP Content-Length（-1 表示未知）
 }
 
 // shouldSkipCapture 判断是否应该跳过捕获
 func shouldSkipCapture(contentType string) bool {
 	skipTypes := []string{
-		"text/event-stream", // SSE
-		"websocket",         // WebSocket
+		"text/event-stream",         // SSE
+		"websocket",                 // WebSocket
 		"multipart/x-mixed-replace", // 流式响应
 	}
 	lowerType := strings.ToLower(contentType)
@@ -41,16 +46,16 @@ func shouldSkipCapture(contentType string) bool {
 	return false
 }
 
-// WrapBodyForCapture 包装 Body 进行 MinIO 捕获
+// BuildBodyReader 包装 Body 进行 MinIO 捕获
 // 参数:
 //   - inner: 内层 io.ReadCloser（通常是流量统计层）
 //   - sessionID: 会话 ID
 //   - bodyType: "req" 或 "resp"
 //   - contentType: Content-Type 头
+//   - contentLength: HTTP Content-Length（-1 表示未知）
 // 返回:
 //   - *bodyCaptReader: 包装后的 Reader
-//   - *BodyCapture: 捕获状态（nil 表示跳过捕获）
-func BuildBodyReader(inner io.ReadCloser, sessionID int64, bodyType, contentType string) (*bodyCaptReader) {
+func BuildBodyReader(inner io.ReadCloser, sessionID int64, bodyType, contentType string, contentLength int64) *bodyCaptReader {
 	// 如果 MinIO 未启用或内容类型需要跳过，直接返回透传 Reader
 	if !IsEnabled() || shouldSkipCapture(contentType) {
 		return &bodyCaptReader{inner: inner, skipUpload: true}
@@ -59,13 +64,14 @@ func BuildBodyReader(inner io.ReadCloser, sessionID int64, bodyType, contentType
 	// 创建 Pipe 用于数据流转
 	pr, pw := io.Pipe()
 	reader := &bodyCaptReader{
-		inner:      inner,
-		pipeWriter: pw,
-		Capture:    &BodyCapture{
-						ObjectKey:   GetObjectKey(sessionID, bodyType),
-						ContentType: contentType,
-					},
-		doneCh:     make(chan struct{}),
+		inner:         inner,
+		pipeWriter:    pw,
+		Capture: &BodyCapture{
+			ObjectKey:   GetObjectKey(sessionID, bodyType),
+			ContentType: contentType,
+		},
+		doneCh:        make(chan struct{}),
+		contentLength: contentLength,
 	}
 
 	// 启动上传协程
@@ -83,8 +89,17 @@ func (r *bodyCaptReader) uploadToMinIO(pr *io.PipeReader) {
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Minute)
 	defer cancel()
 
-	// 执行上传
-	info, err := GlobalClient.PutObject(ctx, r.Capture.ObjectKey, pr, r.Capture.ContentType)
+	var info minio.UploadInfo
+	var err error
+
+	if r.contentLength >= 0 {
+		// 策略 A：已知长度（包括 0），直接流式上传
+		info, err = GlobalClient.PutObjectWithSize(ctx, r.Capture.ObjectKey, pr, r.contentLength, r.Capture.ContentType)
+	} else {
+		// 策略 B：未知长度（chunked），使用临时文件
+		info, err = r.uploadViaTempFile(ctx, pr)
+	}
+
 	if err != nil {
 		r.Capture.Error = err
 		return
@@ -93,6 +108,49 @@ func (r *bodyCaptReader) uploadToMinIO(pr *io.PipeReader) {
 	// 记录上传成功信息
 	r.Capture.Size = info.Size
 	r.Capture.Uploaded = true
+}
+
+// uploadViaTempFile 通过临时文件上传（用于未知大小的情况）
+func (r *bodyCaptReader) uploadViaTempFile(ctx context.Context, pr *io.PipeReader) (minio.UploadInfo, error) {
+	// 使用相对路径便于调试观察
+	if err := os.MkdirAll("myminio/tmp", 0755); err != nil {
+		return minio.UploadInfo{}, fmt.Errorf("创建临时目录失败: %w", err)
+	}
+
+	tempFile, err := os.CreateTemp("myminio/tmp", "upload-*.tmp")
+	if err != nil {
+		return minio.UploadInfo{}, fmt.Errorf("创建临时文件失败: %w", err)
+	}
+	tempPath := tempFile.Name()
+
+	// 确保清理（延迟到函数末尾）
+	defer os.Remove(tempPath)
+
+	// 1. 写入临时文件
+	size, err := io.Copy(tempFile, pr)
+	if err != nil {
+		tempFile.Close()
+		return minio.UploadInfo{}, fmt.Errorf("写入临时文件失败: %w", err)
+	}
+
+	// 2. 重置文件指针
+	if _, err := tempFile.Seek(0, 0); err != nil {
+		tempFile.Close()
+		return minio.UploadInfo{}, fmt.Errorf("重置文件指针失败: %w", err)
+	}
+
+	// 3. 上传（使用已知 size）
+	contentType := r.Capture.ContentType
+	if contentType == "" {
+		contentType = "application/octet-stream"
+	}
+
+	info, err := GlobalClient.PutObjectWithSize(ctx, r.Capture.ObjectKey, tempFile, size, contentType)
+
+	// 4. 上传完成后关闭文件（在 Remove 之前）
+	tempFile.Close()
+
+	return info, err
 }
 
 // Read 实现 io.Reader 接口

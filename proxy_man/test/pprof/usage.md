@@ -5,6 +5,7 @@ go tool pprof -http=:8081 http://localhost:6060/debug/pprof/heap
 采集30s的cpu数据
 go tool pprof -http=:8083 "http://localhost:6060/debug/pprof/profile?seconds=30"
 
+# ab压力测试
 # -k: Keep-Alive
 # -n: 总请求数 (bench.go 里是 1000/2000/5000)
 # -c: 并发数 (bench.go 里是 10/50/100)
