@@ -5,8 +5,10 @@ import (
 	"io"
 	"log"
 	"net/http"
+	"path/filepath"
 	"time"
-	"bytes"
+	"os"
+	"strconv"
 )
 
 // TestData 测试数据结构
@@ -16,12 +18,6 @@ type TestData struct {
 	Data   []byte
 }
 
-// 内置测试数据
-var testFiles = map[string]TestData{
-	"small_1k":   {Name: "small_1k.bin", Size: 1024, Data: generateBytes(1024)},
-	"medium_100k": {Name: "medium_100k.bin", Size: 102400, Data: generateBytes(102400)},
-	"large_1m":    {Name: "large_1m.bin", Size: 1024 * 1024, Data: generateBytes(1024 * 1024)},
-}
 
 // generateBytes 生成指定长度的测试字节流
 func generateBytes(size int64) []byte {
@@ -40,24 +36,36 @@ func handleTestDownload(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "缺少 file 参数", http.StatusBadRequest)
 		return
 	}
+    // 从磁盘读取文件
+    filePath := filepath.Join("test/data", filename)
+    file, err := os.Open(filePath)
+    if err != nil {
+        http.Error(w, "文件不存在", http.StatusNotFound)
+        return
+    }
+	defer file.Close()
 
-	// 查找测试数据
-	for _, testData := range testFiles {
-		if testData.Name == filename {
-			w.Header().Set("Content-Type", "application/octet-stream")
-			w.Header().Set("Content-Disposition", fmt.Sprintf("attachment; filename=\"%s\"", filename))
-			w.Header().Set("Content-Length", fmt.Sprintf("%d", testData.Size))
-
-			start := time.Now()
-			written, _ := io.Copy(w, bytes.NewReader(testData.Data))
-			duration := time.Since(start)
-
-			log.Printf("[下载] 文件: %s | 大小: %d 字节 | 耗时: %v | 速度: %.2f MB/s",
-				filename, written, duration, float64(written)/(1024*1024)/duration.Seconds())
-			return
-		}
+	fileInfo, err := file.Stat()
+	if err != nil {
+		http.Error(w, "无法获取文件信息", http.StatusInternalServerError)
+		return
 	}
 
+    // 保留原有的自定义逻辑
+    w.Header().Set("Content-Type", "application/octet-stream")
+    w.Header().Set("Content-Disposition", fmt.Sprintf("attachment; filename=\"%s\"", filename))
+    w.Header().Set("Content-Length", strconv.FormatInt(fileInfo.Size(), 10))
+
+    start := time.Now()
+    written, err := io.Copy(w, file)
+    duration := time.Since(start)
+
+    if err != nil {
+        log.Printf("[下载失败] 文件: %s | 已发送: %d | 错误: %v", filename, written, err)
+    } else {
+        log.Printf("[下载] 文件: %s | 大小: %d 字节 | 耗时: %v | 速度: %.2f MB/s",
+            filename, written, duration, float64(written)/(1024*1024)/duration.Seconds())
+    }
 	http.Error(w, "文件不存在", http.StatusNotFound)
 }
 
@@ -109,19 +117,19 @@ func handleRoot(w http.ResponseWriter, r *http.Request) {
 <body>
     <h1>🧪 测试后端服务器 (端口 9001)</h1>
     <div class="endpoint">
-        <div><span class="method">GET</span> <span class="path">/test/download?file=small_1k.bin</span></div>
+        <div><span class="method">GET</span> <span class="path">http://localhost:9001/test/download?file=small_1k.bin</span></div>
         <div class="desc">返回 1KB 测试数据</div>
     </div>
     <div class="endpoint">
-        <div><span class="method">GET</span> <span class="path">/test/download?file=medium_100k.bin</span></div>
+        <div><span class="method">GET</span> <span class="path">http://localhost:9001/test/download?file=medium_100k.bin</span></div>
         <div class="desc">返回 100KB 测试数据</div>
     </div>
     <div class="endpoint">
-        <div><span class="method">GET</span> <span class="path">/test/download?file=large_1m.bin</span></div>
+        <div><span class="method">GET</span> <span class="path">http://localhost:9001/test/download?file=large_1m.bin</span></div>
         <div class="desc">返回 1MB 测试数据</div>
     </div>
     <div class="endpoint">
-        <div><span class="method">POST</span> <span class="path">/test/upload</span></div>
+        <div><span class="method">POST</span> <span class="path">http://localhost:9001/test/upload</span></div>
         <div class="desc">接收上传数据并返回统计信息</div>
     </div>
     <div class="endpoint">
