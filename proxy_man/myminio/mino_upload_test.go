@@ -70,7 +70,7 @@ func TestBodyCapture_LargeFile(t *testing.T) {
     // 测试大文件流式上传（验证内存占用稳定）
     const streamSize = 100 * 1024 * 1024 // 100MB
     body := io.NopCloser(io.LimitReader(rand.Reader, streamSize))  
-    reader := BuildBodyReader(body, 1, "resp", "application/octet-stream")
+    reader := BuildBodyReader(body, 1, "resp", "application/octet-stream", streamSize)
 
     _, err := io.Copy(io.Discard, reader)
     assert.NoError(t, err, "Copy should complete without error")

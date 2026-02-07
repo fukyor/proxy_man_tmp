@@ -418,22 +418,70 @@ func (proxy *CoreHttpServer) MyHttpsHandle(w http.ResponseWriter, r *http.Reques
 						// 封装好reader准备读取target响应
 						remote_res = bufio.NewReader(connRemoteSite)
 					}
-					// 向target发起请求
-					if err := req.Write(connRemoteSite); err != nil {
-						ctxt.SetCaptureError(err) // 记录错误
-						httpError(connFromClinet, ctxt, err)
-						return false
-					}
-					// 根据req类型，接受响应
+					// ============= 修复 Expect: 100-continue 死锁 =============
+					// 核心思路：发送和接受使用全双工，而不是串行发送
+					writeErrCh := make(chan error, 1)
+					go func() {
+						err := req.Write(connRemoteSite)
+						writeErrCh <- err
+						close(writeErrCh)
+						req.Body.Close()
+					}()
+
+					// 主线程立即开始读取响应，处理 1xx 中间状态
+					// 发送和接受同时进行
 					resp, err = func() (*http.Response, error) {
-						defer req.Body.Close()
-						return http.ReadResponse(remote_res, req)
+						for {
+							respTmp, readErr := http.ReadResponse(remote_res, req)
+							// 读取失败时，检查是否由写入错误导致
+							if readErr != nil {
+								select {
+								case writeErr := <-writeErrCh:
+									if writeErr != nil {
+										return nil, fmt.Errorf("读取响应失败: %v (写入错误: %v)", readErr, writeErr)
+									}
+								default:
+								}
+								return nil, readErr
+							}
+
+							// 处理 1xx 中间状态响应（如 100 Continue）
+							if respTmp.StatusCode >= 100 && respTmp.StatusCode < 200 {
+								// 构造状态行
+								statusCodeStr := strconv.Itoa(respTmp.StatusCode) + " "
+								text := strings.TrimPrefix(respTmp.Status, statusCodeStr)
+								statusLine := "HTTP/1.1 " + statusCodeStr + text + "\r\n"
+
+								// 转发给客户端
+								if _, err := io.WriteString(connFromClinet, statusLine); err != nil {
+									return nil, err
+								}
+								if err := respTmp.Header.Write(connFromClinet); err != nil {
+									return nil, err
+								}
+								if _, err := io.WriteString(connFromClinet, "\r\n"); err != nil {
+									return nil, err
+								}
+
+								// 清理临时响应的 Body
+								if respTmp.Body != nil {
+									io.Copy(io.Discard, respTmp.Body)
+									respTmp.Body.Close()
+								}
+								// 继续读取最终响应，第一次是contiune 100，第二次是服务器在接受完req.body后发送200 OK
+								continue
+							}
+
+							// 收到第一次响应直接返回（>= 200）
+							return respTmp, nil
+						}
 					}()
 					if err != nil {
 						ctxt.SetCaptureError(err) // 记录错误
 						httpError(connFromClinet, ctxt, err)
 						return false
 					}
+					// ============= 修复结束 =============
 				}
 				// 响应处理
 				resp = proxy.filterResponse(resp, ctxt)

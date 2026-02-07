@@ -145,6 +145,9 @@ func (r *bodyCaptReader) uploadViaTempFile(ctx context.Context, pr *io.PipeReade
 		contentType = "application/octet-stream"
 	}
 
+	// 1. 不需要担心minio上传大文件导致OOM，因为size较大时minio会使用分片上传，大概也只会消耗几十MB的内存作为minio客户端和socket之间的缓冲
+	// 2. 那为什么大文件上传不直接设置为-1，使用自动分片？因为S3 标准最多允许 10,000 个分片。10000个分片是存储桶中存储对象的分块数量，所以
+	// 导致了SDK最多可以分10000块上传，我们传入文件大小辅助minio确定分片最小大小为size/10000。有助于更小的内存占用。
 	info, err := GlobalClient.PutObjectWithSize(ctx, r.Capture.ObjectKey, tempFile, size, contentType)
 
 	// 4. 上传完成后关闭文件（在 Remove 之前）

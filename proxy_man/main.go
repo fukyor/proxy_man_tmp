@@ -57,8 +57,8 @@ func main() {
 	// mproxy.PrintRespHeader(proxy)
 	mproxy.AddTrafficMonitor(proxy)
 	//mproxy.StatusChange(proxy)
-	mproxy.HttpMitmMode(proxy)
-	//mproxy.HttpsMitmMode(proxy)
+	//mproxy.HttpMitmMode(proxy)
+	mproxy.HttpsMitmMode(proxy)
 
 
 	// 启动 WebSocket 控制服务
