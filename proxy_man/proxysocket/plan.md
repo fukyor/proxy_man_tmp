@@ -1,225 +1,273 @@
-# MinIO 上传内存优化方案
+# ConnectHTTPMitm 死锁修复方案审查与计划
 
-## 问题分析
+## 问题描述
 
-**根本原因**：`minioUtils.go:17` 中 `PutObject` 的 size 参数硬编码为 `-1`，导致 MinIO SDK 在处理未知大小流时将数据读入内存缓冲，引发 OOM。
+### 死锁场景
 
-**问题链条**：
+当客户端（如 Curl）使用 `Expect: 100-continue` 头上传大文件时，会发生短暂死锁：
 
 ```
-actions.go:45/118 → BuildBodyReader(未传ContentLength)
-                     ↓
-minioUpload.go:72 → uploadToMinIO(PipeReader)
-                     ↓
-minioUpload.go:87 → PutObject(ctx, key, pr, contentType)
-                     ↓
-minioUtils.go:17 → client.PutObject(..., -1, ...)
-                                    ^^^
-                                    触发 MinIO SDK 内存缓冲
+时间线:
+T0: Client 发送 Header (带 Expect: 100-continue)
+T1: Proxy 收到 Header，调用 req.Write(connRemoteSite)
+T2: Target 收到 Header，秒回 "100 Continue"
+T3: "100 Continue" 到达 Proxy 的 TCP 接收缓冲区
+T4: Client 等待 1 秒后放弃，开始发送 100MB Body
+T5: Proxy 的 req.Write 正在搬运 Body，无法读取响应
+    → "100 Continue" 积压在缓冲区中
+T6: req.Write 完成后才调用 http.ReadResponse
+    → 才能转发积压已久的 "100 Continue"
 ```
 
-## 解决方案：混合策略
+### 根本原因
 
-### 策略 A：优先使用 Content-Length（Happy Path）
+`req.Write()` 是同步阻塞操作：
 
-当 `ContentLength > 0` 时，直接透传给 MinIO，零内存占用。
+- 它按顺序发送：Header → Body（流式读取）
+- 只有发送完整个请求后才会 return
+- 在此期间无法读取 Target 的响应
 
-### 策略 B：临时文件中转（保底方案）
+**受影响代码位置**：`mproxy/https.go:422-431`
 
-当 `ContentLength == -1`（chunked 编码）时，先写入临时文件获得确切 size，再上传。
+## 方案审查
 
-## 修改文件清单
+### plan.md 中的修复方案分析
 
-| 文件                     | 修改内容                                        |
-| ------------------------ | ----------------------------------------------- |
-| `myminio/minioUtils.go`  | 添加 `PutObjectWithSize` 方法                   |
-| `myminio/minioUpload.go` | 添加 `contentLength` 字段，实现条件分支上传逻辑 |
-| `mproxy/actions.go`      | 传递 `ContentLength` 给 `BuildBodyReader`       |
+**核心思路**：
 
-## 详细实现步骤
+1. 启动 Goroutine 专门负责 `req.Write`
+2. 主线程立即开始读取响应
+3. 循环处理 1xx 响应，立即转发给客户端
 
-### 步骤 1：修改 `myminio/minioUtils.go`
+### 审查结果
 
-添加新方法 `PutObjectWithSize`，允许传入确切的大小：
+#### ✅ 正确的部分
+
+1. **并发模型设计正确**
+   - 读写分离避免死锁
+   - 使用 channel 传递错误
+
+2. **1xx 响应处理逻辑正确**
+   - `http.ReadResponse` 会返回 1xx 响应（不会自动跳过）
+   - 循环读取可以正确处理 1xx 响应
+   - 手动构造并发送 1xx 响应符合 RFC 7231
+
+3. **与现有代码风格一致**
+   - 项目中已有类似的双向转发模式（隧道模式、WebSocket）
+
+#### ⚠️ 需要改进的部分
+
+**问题 1：`req.Body` 生命周期管理**
+
+方案中注释掉了 `req.Body.Close()`：
 
 ```go
-// PutObjectWithSize 上传对象到 MinIO（指定大小，推荐使用）
-func (c *Client) PutObjectWithSize(ctx context.Context, key string, reader io.Reader, size int64, contentType string) (minio.UploadInfo, error) {
-    opts := minio.PutObjectOptions{
-        ContentType: contentType,
-    }
-    // 传入真实的 size，避免 MinIO SDK 使用内存缓冲
-    return c.client.PutObject(ctx, c.config.Bucket, key, reader, size, opts)
+// line 23: defer req.Body.Close() // 注意：这里可能需要斟酌
+```
+
+**建议**：在 `req.Write` goroutine 中关闭 Body：
+
+```go
+go func() {
+    defer req.Body.Close()  // 在写完成后关闭
+    err := req.Write(connRemoteSite)
+    writeErrCh <- err
+    close(writeErrCh)
+}()
+```
+
+**问题 2：错误处理不完整**
+
+方案中的 `select` 只是非阻塞检查，如果 `req.Write` 失败了但响应已经成功读取，这个错误会被忽略。
+
+**建议**：在返回最终响应前，等待 `writeErrCh` 确保 Body 发送完成：
+
+```go
+// 在读取到最终响应后
+if writeErr := <-writeErrCh; writeErr != nil {
+    // 记录警告但不中断响应处理（Early Response 情况）
+    ctxt.WarnP("Request write failed after response received: %v", writeErr)
 }
 ```
 
-### 步骤 2：修改 `myminio/minioUpload.go`
+**问题 3：连接复用问题**
 
-#### 2.1 扩展 `bodyCaptReader` 结构体
+`ConnectHTTPMitm` 使用长连接隧道（`for !reqReader.IsEOF()`），`connRemoteSite` 会在多个请求之间复用。
 
-```go
-type bodyCaptReader struct {
-    inner         io.ReadCloser  // 内层 Reader（通常是流量统计层）
-    pipeWriter    *io.PipeWriter // 用于向上传协程传输数据
-    Capture       *BodyCapture   // 捕获状态
-    doneCh        chan struct{}  // 上传完成信号
-    skipUpload    bool           // 是否跳过捕获
-    contentLength int64          // HTTP Content-Length（-1 表示未知）
-}
-```
+需要确保：
 
-#### 2.2 修改 `BuildBodyReader` 函数签名
+1. `req.Write` 完成后，连接仍然可用
+2. 如果 `req.Write` 失败，需要关闭连接并重新建立
 
-```go
-func BuildBodyReader(inner io.ReadCloser, sessionID int64, bodyType, contentType string, contentLength int64) (*bodyCaptReader)
-```
+**问题 4：缺少流量统计**
 
-#### 2.3 重写 `uploadToMinIO` 方法
+当前代码在 `actions.go` 中通过包装 `req.Body` 和 `resp.Body` 实现流量统计。但如果在 `req.Write` goroutine 中读取 Body，流量统计的 `reqBodyReader` 可能无法正常工作。
 
-```go
-func (r *bodyCaptReader) uploadToMinIO(pr *io.PipeReader) {
-    defer close(r.doneCh)
-    defer pr.Close()
+**建议**：确保流量统计在 `req.Write` 之前正确设置。
 
-    ctx, cancel := context.WithTimeout(context.Background(), 30*time.Minute)
-    defer cancel()
+## 修复计划
 
-    var info minio.UploadInfo
-    var err error
+### 修改文件
 
-    if r.contentLength > 0 {
-        // 策略 A：已知长度，直接流式上传（零内存占用）
-        info, err = GlobalClient.PutObjectWithSize(ctx, r.Capture.ObjectKey, pr, r.contentLength, r.Capture.ContentType)
-    } else {
-        // 策略 B：未知长度，使用临时文件中转
-        info, err = r.uploadViaTempFile(ctx, pr)
-    }
+**主要文件**：`mproxy/https.go`
 
-    if err != nil {
-        r.Capture.Error = err
-        return
-    }
+**修改位置**：`ConnectHTTPMitm` case 中的请求发送和响应读取逻辑（约 422-436 行）
 
-    r.Capture.Size = info.Size
-    r.Capture.Uploaded = true
-}
+### 修改步骤
 
-// uploadViaTempFile 通过临时文件上传（辅助方法）
-func (r *bodyCaptReader) uploadViaTempFile(ctx context.Context, pr *io.PipeReader) (minio.UploadInfo, error) {
-    // 1. 创建临时文件
-    if err := os.MkdirAll("myminio/tmp", 0755); err != nil {
-        return minio.UploadInfo{}, err
-    }
+1. **修改请求发送逻辑**（约 422-426 行）
+   - 创建错误 channel
+   - 启动 goroutine 处理 `req.Write`
+   - 在 goroutine 中管理 `req.Body` 生命周期
 
-    tempFile, err := os.CreateTemp("myminio/tmp", "upload-*.tmp")
-    if err != nil {
-        return minio.UploadInfo{}, err
-    }
-    tempPath := tempFile.Name()
+2. **修改响应读取逻辑**（约 428-436 行）
+   - 立即开始读取响应（不等待 `req.Write` 完成）
+   - 添加循环处理 1xx 响应
+   - 手动构造并发送 1xx 响应给客户端
+   - 确保在读取最终响应后检查 `req.Write` 错误
 
-    defer func() {
-        tempFile.Close()
-        os.Remove(tempPath)
-    }()
+3. **添加 100 Continue 转发支持**
+   - 循环读取响应
+   - 检测 1xx 状态码
+   - 手动写入 1xx 响应到客户端连接
 
-    // 2. 写入临时文件
-    size, err := io.Copy(tempFile, pr)
-    if err != nil {
-        return minio.UploadInfo{}, err
-    }
-
-    // 3. 重置文件指针
-    if _, err := tempFile.Seek(0, 0); err != nil {
-        return minio.UploadInfo{}, err
-    }
-
-    // 4. 使用已知 size 上传
-    contentType := r.Capture.ContentType
-    if contentType == "" {
-        contentType = "application/octet-stream"
-    }
-
-    return GlobalClient.PutObjectWithSize(ctx, r.Capture.ObjectKey, tempFile, size, contentType)
-}
-```
-
-### 步骤 3：修改 `mproxy/actions.go`
-
-在两处调用 `BuildBodyReader` 的地方传递 `ContentLength`：
-
-#### 3.1 请求阶段（约第 45 行）
+### 关键代码结构
 
 ```go
-contentType := req.Header.Get("Content-Type")
-captReader := myminio.BuildBodyReader(trafficReader, ctx.Session, "req", contentType, req.ContentLength)
+// ---------------------------------------------------------
+// 最终实施代码 (mproxy/https.go -> ConnectHTTPMitm case)
+// ---------------------------------------------------------
+
+// 1. 创建错误通道，缓冲区设为1防止阻塞
+writeErrCh := make(chan error, 1)
+
+// 2. 启动协程发送请求
+go func() {
+    // req.Write 负责把 Header 和 Body 发给 Target
+    // 注意：不要在这里 Close req.Body，因为主线程还要用连接回写响应
+    err := req.Write(connRemoteSite)
+    writeErrCh <- err
+    close(writeErrCh)
+}()
+
+// 3. 主线程循环读取响应
+resp, err = func() (*http.Response, error) {
+    // 【关键】这里绝对不能有 defer req.Body.Close()
+    
+    for {
+        // 阻塞读取响应
+        resp, readErr := http.ReadResponse(remote_res, req)
+
+        // -----------------------
+        // 分支 A: 读取失败
+        // -----------------------
+        if readErr != nil {
+            // 只有读失败了，才检查是不是写错误导致的
+            select {
+            case writeErr := <-writeErrCh:
+                if writeErr != nil {
+                    return nil, fmt.Errorf("read err: %v, caused by write err: %v", readErr, writeErr)
+                }
+            default:
+            }
+            return nil, readErr
+        }
+
+        // -----------------------
+        // 分支 B: 读取成功 (readErr == nil)
+        // -----------------------
+        
+        // 处理 1xx 中间状态响应 (如 100 Continue)
+        if resp.StatusCode >= 100 && resp.StatusCode < 200 {
+            // 构造状态行
+            statusCodeStr := strconv.Itoa(resp.StatusCode) + " "
+            text := strings.TrimPrefix(resp.Status, statusCodeStr)
+            statusLine := "HTTP/1.1 " + statusCodeStr + text + "\r\n"
+
+            // 写入状态行
+            if _, err := io.WriteString(connFromClinet, statusLine); err != nil {
+                 return nil, err
+            }
+            // 写入 Header
+            if err := resp.Header.Write(connFromClinet); err != nil {
+                return nil, err
+            }
+            // 写入空行
+            if _, err := io.WriteString(connFromClinet, "\r\n"); err != nil {
+                return nil, err
+            }
+
+            // 清理临时 resp 的 Body (通常是空的，但为了规范)
+            if resp.Body != nil {
+                io.Copy(io.Discard, resp.Body)
+                resp.Body.Close() // 这里的 Close 只是销毁 resp 对象，不影响连接
+            }
+
+            // 【关键】继续循环，等待最终的 200 OK
+            continue
+        }
+
+        // 处理最终响应 (>= 200)，直接返回
+        return resp, nil
+    }
+}()
 ```
 
-#### 3.2 响应阶段（约第 118 行）
+### 验证步骤
 
-```go
-contentType := resp.Header.Get("Content-Type")
-captReader := myminio.BuildBodyReader(trafficReader, ctx.Session, "resp", contentType, resp.ContentLength)
-```
+1. **编译测试**
 
-### 步骤 4：创建临时文件目录
+   ```bash
+   go build -o proxy_man main.go
+   ```
 
-在项目根目录或启动脚本中确保 `myminio/tmp` 目录存在：
+2. **功能测试 - 使用 Curl 上传大文件**
 
-```bash
-mkdir -p myminio/tmp
-```
+   ```bash
+   # 测试 100 Continue 行为
+   curl -v --proxy http://localhost:8080 \
+     --upload-file large_file.bin \
+     http://example.com/upload
+   ```
 
-或在代码中 `init()` 时自动创建。
+3. **验证日志输出**
 
-## 验证测试
+   - 检查是否正确转发 100 Continue
+   - 检查流量统计是否正确
+   - 检查连接是否正确关闭
 
-### 1. 单元测试
+4. **压力测试**
 
-```bash
-cd myminio
-go test -v -run TestBodyCapture
-```
+   - 多个并发上传请求
+   - 验证连接复用是否正常
 
-### 2. 内存测试
+## 风险评估
 
-上传 100MB 文件，监控内存占用：
+### 低风险
 
-```bash
-# ContentLength > 0 场景（应该保持低内存）
-curl -X POST -p -x http://127.0.0.1:8080 --data-binary @test/data/huge_100m.bin http://localhost:9001/test/upload
+- 修改范围有限（仅 `ConnectHTTPMitm` case）
+- 不影响其他连接模式（`ConnectMitm`, `ConnectAccept`）
+- 使用成熟的并发模式（项目已有类似实现）
 
-# Chunked 编码场景（应该使用磁盘，内存仍低）
-curl -X POST  -p -x http://127.0.0.1:8080 -H "Transfer-Encoding: chunked"  --data-binary @test/data/huge_100m.bin http://localhost:9001/test/upload
-```
+### 中风险
 
-### 3. 监控内存使用
+- `req.Body` 生命周期管理需要仔细测试
+- 错误处理路径增加，需要全面测试
+- 1xx 响应转发逻辑需要验证边界情况
 
-```bash
-# Windows
-tasklist /FI "IMAGENAME eq proxy_man.exe"
+### 缓解措施
 
-# 或在代码中添加 runtime.MemStats 打印
-```
+1. 添加详细的日志输出
+2. 在测试环境充分验证后再部署
+3. 保留原代码的回滚方案
 
-## 预期效果
+## 总结
 
-| 场景              | 修改前             | 修改后             |
-| ----------------- | ------------------ | ------------------ |
-| ContentLength > 0 | 高内存（SDK 缓冲） | 零额外内存         |
-| Chunked 编码      | 高内存 + 可能 OOM  | 磁盘 I/O，内存稳定 |
-| 并发大文件        | 内存爆炸风险       | 磁盘代替内存，稳定 |
+plan.md 中的修复方案**总体正确**，核心思路可以解决死锁问题。主要需要改进：
 
-## 注意事项
+1. **`req.Body` 生命周期管理** - 在 goroutine 中关闭
+2. **错误处理完善** - 确保所有错误路径都被处理
+3. **连接复用验证** - 确保长连接隧道正常工作
+4. **流量统计验证** - 确保 `reqBodyReader` 仍然有效
 
-1. **临时文件目录**：确保 `myminio/tmp` 目录存在且有写入权限
-2. **清理机制**：代码已包含 `defer os.Remove(tempPath)` 确保清理
-3. **并发安全**：每个上传使用独立的临时文件，无竞争问题
-4. **性能权衡**：临时文件方案增加磁盘 I/O，但避免 OOM 风险
-
-## 后续优化（可选）
-
-如需进一步优化，可考虑：
-
-- 添加磁盘空间监控
-- 添加文件大小/并发数量限制
-- 使用内存映射文件（mmap）优化性能
+建议按上述计划实施修复，并进行充分测试。
