@@ -3,7 +3,6 @@ package main_test
 import (
 	"context"
 	"io"
-	"log"
 	"net/http"
 	"proxy_man/myminio"
 	"strings"
@@ -24,8 +23,6 @@ func TestMain(m *testing.M) {
 
 // 专门测试 BuildBodyReader 是否正确释放了协程
 func TestBodyReader_Leak(t *testing.T) {
-	ctx, cancel := context.WithTimeout(context.Background(), 1*time.Minute)
-    defer cancel()
 	// 初始化 MinIO
 	endpoint := "127.0.0.1:9000"
 	accessKeyID := "root"
@@ -50,8 +47,9 @@ func TestBodyReader_Leak(t *testing.T) {
 	}
 
 	defer goleak.VerifyNone(t)
+	ctx, cancel := context.WithTimeout(context.Background(), 1*time.Minute)
+    defer cancel()
 	defer tr.CloseIdleConnections() // <--- 测试结束强制关闭空闲连接
-	
 	// 2. 构造数据
 	
 	fakeBody := io.NopCloser(strings.NewReader("test data"))
