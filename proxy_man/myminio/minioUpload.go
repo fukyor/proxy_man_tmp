@@ -11,7 +11,7 @@ import (
 	"github.com/minio/minio-go/v7"
 )
 
-// BodyCapture Body 捕获状态
+// BodyCapture Body上传状态
 type BodyCapture struct {
 	ObjectKey   string // MinIO 对象 Key
 	Size        int64  // 上传后的实际大小

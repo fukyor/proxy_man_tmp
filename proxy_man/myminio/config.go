@@ -21,8 +21,8 @@ type Config struct {
 
 // Client MinIO 客户端封装
 type Client struct {
-	client *minio.Client
-	config Config
+	Client *minio.Client
+	Config Config
 }
 
 // GlobalClient 全局 MinIO 客户端实例
@@ -53,5 +53,5 @@ func NewClient(cfg Config) (*Client, error) {
 		return nil, fmt.Errorf("Bucket '%s' 不存在", cfg.Bucket)
 	}
 
-	return &Client{client: client, config: cfg}, nil
+	return &Client{Client: client, Config: cfg}, nil
 }

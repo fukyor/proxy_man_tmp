@@ -14,7 +14,7 @@ func (c *Client) PutObject(ctx context.Context, key string, reader io.Reader, co
 	opts := minio.PutObjectOptions{
 		ContentType: contentType,
 	}
-	return c.client.PutObject(ctx, c.config.Bucket, key, reader, -1, opts)
+	return c.Client.PutObject(ctx, c.Config.Bucket, key, reader, -1, opts)
 }
 
 // PutObjectWithSize 上传对象到 MinIO（指定大小）
@@ -23,14 +23,14 @@ func (c *Client) PutObjectWithSize(ctx context.Context, key string, reader io.Re
 	opts := minio.PutObjectOptions{
 		ContentType: contentType,
 	}
-	return c.client.PutObject(ctx, c.config.Bucket, key, reader, size, opts)
+	return c.Client.PutObject(ctx, c.Config.Bucket, key, reader, size, opts)
 }
 
 // StatObject 获取对象信息
 func (c *Client) StatObject(key string) (minio.ObjectInfo, error) {
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
-	return c.client.StatObject(ctx, c.config.Bucket, key, minio.StatObjectOptions{})
+	return c.Client.StatObject(ctx, c.Config.Bucket, key, minio.StatObjectOptions{})
 }
 
 // GetPresignedURL 生成预签名下载 URL
@@ -43,7 +43,7 @@ func (c *Client) GetPresignedURL(key string, expiry time.Duration, filename stri
 	reqParams := make(url.Values)
 	reqParams.Set("response-content-disposition", "attachment; filename=\""+filename+"\"")
 
-	presignedURL, err := c.client.PresignedGetObject(ctx, c.config.Bucket, key, expiry, reqParams)
+	presignedURL, err := c.Client.PresignedGetObject(ctx, c.Config.Bucket, key, expiry, reqParams)
 	if err != nil {
 		return "", err
 	}
@@ -52,7 +52,7 @@ func (c *Client) GetPresignedURL(key string, expiry time.Duration, filename stri
 
 // IsEnabled 检查 MinIO 是否已启用
 func IsEnabled() bool {
-	return GlobalClient != nil && GlobalClient.config.Enabled
+	return GlobalClient != nil && GlobalClient.Config.Enabled
 }
 
 // GetObjectKey 生成对象存储的 Key
