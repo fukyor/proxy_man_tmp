@@ -96,6 +96,54 @@ func handleTestUpload(w http.ResponseWriter, r *http.Request) {
 		size, duration.Milliseconds(), speed)
 }
 
+// handleTestDownloadChunked 处理 Chunked 编码下载请求
+func handleTestDownloadChunked(w http.ResponseWriter, r *http.Request) {
+	filename := r.URL.Query().Get("file")
+	if filename == "" {
+		http.Error(w, "缺少 file 参数", http.StatusBadRequest)
+		return
+	}
+
+	filePath := filepath.Join(`E:\D\zuoyewenjian\MyProject\proxy_man\test\data`, filename)
+	file, err := os.Open(filePath)
+	if err != nil {
+		http.Error(w, "文件不存在", http.StatusNotFound)
+		return
+	}
+	defer file.Close()
+
+	w.Header().Set("Content-Type", "application/octet-stream")
+	w.Header().Set("Content-Disposition", fmt.Sprintf(`attachment; filename="%s"`, filename))
+	// 不设置 Content-Length → 自动 Transfer-Encoding: chunked
+
+	flusher, canFlush := w.(http.Flusher)
+	buf := make([]byte, 32*1024)
+	var written int64
+	start := time.Now()
+
+	for {
+		n, err := file.Read(buf)
+		if n > 0 {
+			w.Write(buf[:n])
+			written += int64(n)
+			if canFlush {
+				flusher.Flush()
+			}
+		}
+		if err == io.EOF {
+			break
+		}
+		if err != nil {
+			log.Printf("[Chunked下载失败] %s | 已发送: %d | %v", filename, written, err)
+			return
+		}
+	}
+
+	duration := time.Since(start)
+	log.Printf("[Chunked下载] %s | %d字节 | %v | %.2fMB/s",
+		filename, written, duration, float64(written)/(1024*1024)/duration.Seconds())
+}
+
 // handleRoot 根路径，显示可用接口
 func handleRoot(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
@@ -155,22 +203,23 @@ func main() {
 	mux.HandleFunc("/", handleRoot)
 	mux.HandleFunc("/health", handleHealth)
 	mux.HandleFunc("/test/download", handleTestDownload)
+	mux.HandleFunc("/test/download/chunked", handleTestDownloadChunked)
 	mux.HandleFunc("/test/upload", handleTestUpload)
 
 	// 2. 配置 HTTP 服务器 (端口 9001)
 	httpServer := &http.Server{
 		Addr:         ":9001",
 		Handler:      mux, // 使用共享的 mux
-		ReadTimeout:  30 * time.Second,
-		WriteTimeout: 30 * time.Second,
+		ReadTimeout:  5 * time.Minute,
+		WriteTimeout: 5 * time.Minute,
 	}
 
 	// 3. 配置 HTTPS 服务器 (端口 9002)
 	httpsServer := &http.Server{
 		Addr:         ":9002",
 		Handler:      mux, // 使用共享的 mux
-		ReadTimeout:  30 * time.Second,
-		WriteTimeout: 30 * time.Second,
+		ReadTimeout:  5 * time.Minute,
+		WriteTimeout: 5 * time.Minute,
 	}
 
 	// 4. 在 Goroutine 中启动 HTTP 服务器

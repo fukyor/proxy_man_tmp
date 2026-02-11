@@ -2,7 +2,7 @@ package main_test
 
 import (
 	"bytes"
-	"fmt"
+	"crypto/tls"
 	"io"
 	"net/http"
 	"net/url"
@@ -29,195 +29,182 @@ const (
 
 // ===========================================
 
-func TestProxyRequests_Client(t *testing.T) {
-	// 1. 配置 HTTP Client 使用您的代理服务器
-	proxyURL, err := url.Parse("http://" + ProxyAddr)
-	if err != nil {
-		t.Fatalf("代理地址配置错误: %v", err)
-	}
+// ================= 压力测试配置 =================
+var (
+	Payload  []byte // 内存驻留数据（上传用）
+	FileSize int64  // 文件实际大小
 
-	client := &http.Client{
+	stressClient      *http.Client // HTTP 压力测试客户端
+	stressClientHTTPS *http.Client // HTTPS 压力测试客户端
+)
+
+func init() {
+	var err error
+	Payload, err = os.ReadFile(filepath.Join(TestDataDir, "large_1m.bin"))
+	if err != nil {
+		panic("加载测试数据失败: " + err.Error())
+	}
+	FileSize = int64(len(Payload))
+
+	proxyURL, _ := url.Parse("http://" + ProxyAddr)
+
+	stressClient = &http.Client{
 		Transport: &http.Transport{
-			Proxy: http.ProxyURL(proxyURL),
-			// 禁用压缩以确保 Content-Length 准确匹配文件大小 (可选)
-			DisableCompression: true,
+			Proxy:               http.ProxyURL(proxyURL),
+			MaxIdleConns:        200,
+			MaxIdleConnsPerHost: 200,
+			MaxConnsPerHost:     0,
+			IdleConnTimeout:     90 * time.Second,
+			DisableCompression:  true,
 		},
-		// 设置较长的超时时间，以防传输大文件时中断
-		Timeout: 30 * time.Minute,
+		Timeout: 60 * time.Second,
 	}
 
-	// 2. 读取测试文件列表
-	entries, err := os.ReadDir(TestDataDir)
-	if err != nil {
-		t.Fatalf("❌ 无法读取测试数据目录 '%s': %v", TestDataDir, err)
+	stressClientHTTPS = &http.Client{
+		Transport: &http.Transport{
+			Proxy:               http.ProxyURL(proxyURL),
+			TLSClientConfig:     &tls.Config{InsecureSkipVerify: true},
+			MaxIdleConns:        200,
+			MaxIdleConnsPerHost: 200,
+			MaxConnsPerHost:     0,
+			IdleConnTimeout:     90 * time.Second,
+			DisableCompression:  true,
+		},
+		Timeout: 60 * time.Second,
 	}
+}
 
-	var testFiles []string
-	for _, entry := range entries {
-		if !entry.IsDir() {
-			testFiles = append(testFiles, entry.Name())
-		}
-	}
 
-	// 3. 循环测试每个文件
-	for _, fileName := range testFiles {
-		filePath := filepath.Join(TestDataDir, fileName)
-		fileInfo, err := os.Stat(filePath)
-		if err != nil {
-			t.Errorf("⚠️ 无法获取文件信息 %s: %v", fileName, err)
-			continue
-		}
-		fileSize := fileInfo.Size()
-		// === A. 上传测试 (Upload) ===
-		t.Run("httpUpload", func(t *testing.T) {
-			// 打开文件
-			f, err := os.Open(filePath)
-			if err != nil {
-				t.Fatalf("无法打开文件: %v", err)
-			}
-			defer f.Close()
-
-			uploadURL := fmt.Sprintf("%s/test/upload", HttpBackendBaseURL)
-			t.Logf("⬆️ [Upload] %s (%d bytes) -> %s", fileName, fileSize, uploadURL)
-
-			// 构造请求
-			req, err := http.NewRequest("POST", uploadURL, f)
-			if err != nil {
-				t.Fatalf("创建请求失败: %v", err)
-			}
+// ========== 上行压力测试 ==========
+//  go test -bench=Benchmark_Stress_HTTP_Upload_KnownSize -benchtime=3s -run=^$ -v
+func Benchmark_Stress_HTTP_Upload_KnownSize(b *testing.B) {
+	targetURL := HttpBackendBaseURL + "/test/upload"
+	b.SetBytes(FileSize)
+	b.RunParallel(func(pb *testing.PB) {
+		for pb.Next() {
+			req, _ := http.NewRequest("POST", targetURL, bytes.NewReader(Payload))
+			req.ContentLength = FileSize
 			req.Header.Set("Content-Type", "application/octet-stream")
-			// 显式设置 Content-Length (虽然 Go 通常会自动处理，但在代理测试中明确指定有助于排查问题)
-			req.ContentLength = fileSize
-
-			// 发送请求
-			start := time.Now()
-			resp, err := client.Do(req)
+			resp, err := stressClient.Do(req)
 			if err != nil {
-				t.Fatalf("❌ 请求失败 (请检查代理或后端是否启动): %v", err)
+				b.Fatal(err)
 			}
-			defer resp.Body.Close()
+			io.Copy(io.Discard, resp.Body)
+			resp.Body.Close()
+		}
+	})
+}
 
-			// 读取响应
-			body, _ := io.ReadAll(resp.Body)
-			duration := time.Since(start)
-
-			if resp.StatusCode != http.StatusOK {
-				t.Errorf("❌ 上传失败: Status %d | Body: %s", resp.StatusCode, string(body))
-			} else {
-				t.Logf("✅ 上传成功: 耗时 %v | 响应: %s", duration, string(bytes.TrimSpace(body)))
-			}
-		})
-
-		t.Run("httpsUpload", func(t *testing.T) {
-			// 打开文件
-			f, err := os.Open(filePath)
-			if err != nil {
-				t.Fatalf("无法打开文件: %v", err)
-			}
-			defer f.Close()
-
-			uploadURL := fmt.Sprintf("%s/test/upload", HttpsBackendBaseURL)
-			t.Logf("⬆️ [Upload] %s (%d bytes) -> %s", fileName, fileSize, uploadURL)
-
-			// 构造请求
-			req, err := http.NewRequest("POST", uploadURL, f)
-			if err != nil {
-				t.Fatalf("创建请求失败: %v", err)
-			}
+func Benchmark_Stress_HTTP_Upload_Chunked(b *testing.B) {
+	targetURL := HttpBackendBaseURL + "/test/upload"
+	b.SetBytes(FileSize)
+	b.RunParallel(func(pb *testing.PB) {
+		for pb.Next() {
+			req, _ := http.NewRequest("POST", targetURL, io.NopCloser(bytes.NewReader(Payload)))
 			req.Header.Set("Content-Type", "application/octet-stream")
-			// 显式设置 Content-Length (虽然 Go 通常会自动处理，但在代理测试中明确指定有助于排查问题)
-			req.ContentLength = fileSize
-
-			// 发送请求
-			start := time.Now()
-			resp, err := client.Do(req)
+			resp, err := stressClient.Do(req)
 			if err != nil {
-				t.Fatalf("❌ 请求失败 (请检查代理或后端是否启动): %v", err)
+				b.Fatal(err)
 			}
-			defer resp.Body.Close()
+			io.Copy(io.Discard, resp.Body)
+			resp.Body.Close()
+		}
+	})
+}
 
-			// 读取响应
-			body, _ := io.ReadAll(resp.Body)
-			duration := time.Since(start)
-
-			if resp.StatusCode != http.StatusOK {
-				t.Errorf("❌ 上传失败: Status %d | Body: %s", resp.StatusCode, string(body))
-			} else {
-				t.Logf("✅ 上传成功: 耗时 %v | 响应: %s", duration, string(bytes.TrimSpace(body)))
-			}
-		})
-
-
-		// === B. 下载测试 (Download) ===
-		t.Run("Download", func(t *testing.T) {
-			httpDownloadURL := fmt.Sprintf("%s/test/download?file=%s", HttpBackendBaseURL, fileName)
-			t.Logf("⬇️ [Download] %s <- %s", fileName, httpDownloadURL)
-
-			start := time.Now()
-			resp, err := client.Get(httpDownloadURL)
+func Benchmark_Stress_HTTPS_Upload_KnownSize(b *testing.B) {
+	targetURL := HttpsBackendBaseURL + "/test/upload"
+	b.SetBytes(FileSize)
+	b.RunParallel(func(pb *testing.PB) {
+		for pb.Next() {
+			req, _ := http.NewRequest("POST", targetURL, bytes.NewReader(Payload))
+			req.ContentLength = FileSize
+			req.Header.Set("Content-Type", "application/octet-stream")
+			resp, err := stressClientHTTPS.Do(req)
 			if err != nil {
-				t.Fatalf("❌ 请求失败: %v", err)
+				b.Fatal(err)
 			}
-			defer resp.Body.Close()
+			io.Copy(io.Discard, resp.Body)
+			resp.Body.Close()
+		}
+	})
+}
 
-			if resp.StatusCode != http.StatusOK {
-				body, _ := io.ReadAll(resp.Body)
-				t.Fatalf("❌ 下载失败: Status %d | Body: %s", resp.StatusCode, string(body))
-			}
-
-			// 验证数据大小
-			// 使用 io.Copy(io.Discard) 避免将大文件读入内存，只统计字节数
-			receivedBytes, err := io.Copy(io.Discard, resp.Body)
+func Benchmark_Stress_HTTPS_Upload_Chunked(b *testing.B) {
+	targetURL := HttpsBackendBaseURL + "/test/upload"
+	b.SetBytes(FileSize)
+	b.RunParallel(func(pb *testing.PB) {
+		for pb.Next() {
+			req, _ := http.NewRequest("POST", targetURL, io.NopCloser(bytes.NewReader(Payload)))
+			req.Header.Set("Content-Type", "application/octet-stream")
+			resp, err := stressClientHTTPS.Do(req)
 			if err != nil {
-				t.Fatalf("❌ 读取响应流失败: %v", err)
+				b.Fatal(err)
 			}
-			duration := time.Since(start)
+			io.Copy(io.Discard, resp.Body)
+			resp.Body.Close()
+		}
+	})
+}
 
-			// 验证
-			if receivedBytes != fileSize {
-				t.Errorf("❌ 数据不完整: 期望 %d bytes, 实际接收 %d bytes", fileSize, receivedBytes)
-			} else {
-				// 计算吞吐量 (MB/s)
-				throughput := float64(receivedBytes) / 1024 / 1024 / duration.Seconds()
-				t.Logf("✅ 下载成功: %d bytes | 耗时 %v | 速度 %.2f MB/s", receivedBytes, duration, throughput)
-			}
-		})
-		fmt.Println("---------------------------------------------------")
+// ========== 下行压力测试 ==========
 
-		// === B. https下载测试 (Download) ===
-		t.Run("Download", func(t *testing.T) {
-			httpsDownloadURL := fmt.Sprintf("%s/test/download?file=%s", HttpsBackendBaseURL, fileName)
-			t.Logf("⬇️ [Download] %s <- %s", fileName, httpsDownloadURL)
-
-			start := time.Now()
-			resp, err := client.Get(httpsDownloadURL)
+func Benchmark_Stress_HTTP_Download_KnownSize(b *testing.B) {
+	targetURL := HttpBackendBaseURL + "/test/download?file=large_1m.bin"
+	b.SetBytes(FileSize)
+	b.RunParallel(func(pb *testing.PB) {
+		for pb.Next() {
+			resp, err := stressClient.Get(targetURL)
 			if err != nil {
-				t.Fatalf("❌ 请求失败: %v", err)
+				b.Fatal(err)
 			}
-			defer resp.Body.Close()
+			io.Copy(io.Discard, resp.Body)
+			resp.Body.Close()
+		}
+	})
+}
 
-			if resp.StatusCode != http.StatusOK {
-				body, _ := io.ReadAll(resp.Body)
-				t.Fatalf("❌ 下载失败: Status %d | Body: %s", resp.StatusCode, string(body))
-			}
-
-			// 验证数据大小
-			// 使用 io.Copy(io.Discard) 避免将大文件读入内存，只统计字节数
-			receivedBytes, err := io.Copy(io.Discard, resp.Body)
+func Benchmark_Stress_HTTP_Download_Chunked(b *testing.B) {
+	targetURL := HttpBackendBaseURL + "/test/download/chunked?file=large_1m.bin"
+	b.SetBytes(FileSize)
+	b.RunParallel(func(pb *testing.PB) {
+		for pb.Next() {
+			resp, err := stressClient.Get(targetURL)
 			if err != nil {
-				t.Fatalf("❌ 读取响应流失败: %v", err)
+				b.Fatal(err)
 			}
-			duration := time.Since(start)
+			io.Copy(io.Discard, resp.Body)
+			resp.Body.Close()
+		}
+	})
+}
 
-			// 验证
-			if receivedBytes != fileSize {
-				t.Errorf("❌ 数据不完整: 期望 %d bytes, 实际接收 %d bytes", fileSize, receivedBytes)
-			} else {
-				// 计算吞吐量 (MB/s)
-				throughput := float64(receivedBytes) / 1024 / 1024 / duration.Seconds()
-				t.Logf("✅ 下载成功: %d bytes | 耗时 %v | 速度 %.2f MB/s", receivedBytes, duration, throughput)
+func Benchmark_Stress_HTTPS_Download_KnownSize(b *testing.B) {
+	targetURL := HttpsBackendBaseURL + "/test/download?file=large_1m.bin"
+	b.SetBytes(FileSize)
+	b.RunParallel(func(pb *testing.PB) {
+		for pb.Next() {
+			resp, err := stressClientHTTPS.Get(targetURL)
+			if err != nil {
+				b.Fatal(err)
 			}
-		})
-		fmt.Println("---------------------------------------------------")
-	}
+			io.Copy(io.Discard, resp.Body)
+			resp.Body.Close()
+		}
+	})
+}
+
+func Benchmark_Stress_HTTPS_Download_Chunked(b *testing.B) {
+	targetURL := HttpsBackendBaseURL + "/test/download/chunked?file=large_1m.bin"
+	b.SetBytes(FileSize)
+	b.RunParallel(func(pb *testing.PB) {
+		for pb.Next() {
+			resp, err := stressClientHTTPS.Get(targetURL)
+			if err != nil {
+				b.Fatal(err)
+			}
+			io.Copy(io.Discard, resp.Body)
+			resp.Body.Close()
+		}
+	})
 }

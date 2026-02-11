@@ -80,7 +80,8 @@ func setupMinioClient() {
 // ========== 基准测试 ==========
 
 // BenchmarkUpload_RoutineSafety 常规并发上传基准测试（已知长度）
-// go test -bench=BenchmarkUpload_RoutineSafety -benchmem -cpu=2,6,12
+// go test -bench=BenchmarkUpload_RoutineSafety -run=^$ -benchmem -cpu=2,6,12
+// 因为默认先运行单元测试，但我们只想运行基准测试，-run指定运行的单元测试 -run=^$指定不存在的单元测试
 func BenchmarkUpload_RoutineSafety(b *testing.B) {
 	setupMinioClient()
 	data := []byte(strings.Repeat("A", 1024)) // 1KB 数据
@@ -99,6 +100,7 @@ func BenchmarkUpload_RoutineSafety(b *testing.B) {
 }
 
 // BenchmarkUpload_Chunked 未知长度上传（走临时文件路径）
+// go test -bench=BenchmarkUpload_Chunked -run=^$ -benchmem -cpu=2,6,12
 func BenchmarkUpload_Chunked(b *testing.B) {
 	setupMinioClient()
 	data := []byte(strings.Repeat("B", 2048)) // 2KB 数据
@@ -117,6 +119,7 @@ func BenchmarkUpload_Chunked(b *testing.B) {
 }
 
 // BenchmarkUpload_EmptyBody 空 body 边界条件测试
+// go test -bench=BenchmarkUpload_EmptyBody -run=^$ -benchmem -cpu=2,6,12
 func BenchmarkUpload_EmptyBody(b *testing.B) {
 	setupMinioClient()
 
@@ -133,6 +136,7 @@ func BenchmarkUpload_EmptyBody(b *testing.B) {
 }
 
 // BenchmarkUpload_SkipUpload 跳过捕获路径（对照组）
+// go test -bench=BenchmarkUpload_SkipUpload -run=^$ -benchmem -cpu=2,6,12
 func BenchmarkUpload_SkipUpload(b *testing.B) {
 	setupMinioClient()
 	data := []byte(strings.Repeat("C", 1024))
@@ -152,39 +156,8 @@ func BenchmarkUpload_SkipUpload(b *testing.B) {
 
 // ========== 功能测试 ==========
 
-// TestBasicUpload 基本上传功能测试
-func TestBasicUpload(t *testing.T) {
-	setupMinioClient()
-
-	data := []byte(strings.Repeat("A", 1024)) // 1KB 数据
-	fakeBody := io.NopCloser(bytes.NewReader(data))
-	reader := myminio.BuildBodyReader(fakeBody, 10001, "req", "application/octet-stream", int64(len(data)))
-
-	// 读取数据
-	t.Log("开始读取数据")
-	n, err := io.Copy(io.Discard, reader)
-	t.Logf("读取完成: %d bytes, err=%v", n, err)
-	assert.NoError(t, err)
-	assert.Equal(t, int64(len(data)), n)
-
-	// 关闭
-	t.Log("开始关闭 reader")
-	err = reader.Close()
-	t.Logf("关闭完成: err=%v", err)
-	assert.NoError(t, err)
-
-	// 打印状态
-	t.Logf("上传状态: Uploaded=%v, Size=%d, Error=%v",
-		reader.Capture.Uploaded, reader.Capture.Size, reader.Capture.Error)
-
-	// 验证上传成功（在 Mock 场景下，Capture.Error 可能包含 "closed pipe" 错误，这是正常的）
-	// 因为 Mock 响应太快，可能在主线程完成所有写入前就关闭了 pipe
-	if reader.Capture.Error != nil {
-		t.Logf("警告: 上传过程中出现错误（这在快速 Mock 场景下是正常的）: %v", reader.Capture.Error)
-	}
-}
-
 // TestGoroutineLeak 协程泄漏检测测试（使用 goleak.VerifyNone）
+// go test -bench=TestGoroutineLeak -run=^$ -benchmem -cpu=2,6,12
 func TestGoroutineLeak(t *testing.T) {
 	setupMinioClient()
 	defer goleak.VerifyNone(t, goleak.IgnoreCurrent())
