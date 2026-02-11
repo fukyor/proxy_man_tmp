@@ -40,7 +40,7 @@ var (
 
 func init() {
 	var err error
-	Payload, err = os.ReadFile(filepath.Join(TestDataDir, "large_1m.bin"))
+	Payload, err = os.ReadFile(filepath.Join(TestDataDir, "large_2m.bin"))
 	if err != nil {
 		panic("加载测试数据失败: " + err.Error())
 	}
@@ -76,7 +76,7 @@ func init() {
 
 
 // ========== 上行压力测试 ==========
-//  go test -bench=Benchmark_Stress_HTTP_Upload_KnownSize -benchtime=3s -run=^$ -v
+//  go test -bench=Benchmark_Stress_HTTP_Upload_KnownSize -benchtime=3s -run=^$ -v -cpu 2,6,12
 func Benchmark_Stress_HTTP_Upload_KnownSize(b *testing.B) {
 	targetURL := HttpBackendBaseURL + "/test/upload"
 	b.SetBytes(FileSize)
@@ -95,6 +95,8 @@ func Benchmark_Stress_HTTP_Upload_KnownSize(b *testing.B) {
 	})
 }
 
+
+// go test -bench=Benchmark_Stress_HTTP_Upload_Chunked -benchtime=3s -run=^$ -v -cpu 2,6,12
 func Benchmark_Stress_HTTP_Upload_Chunked(b *testing.B) {
 	targetURL := HttpBackendBaseURL + "/test/upload"
 	b.SetBytes(FileSize)
@@ -112,6 +114,7 @@ func Benchmark_Stress_HTTP_Upload_Chunked(b *testing.B) {
 	})
 }
 
+// go test -bench=Benchmark_Stress_HTTPS_Upload_KnownSize -benchtime=3s -run=^$ -v -cpu 2,6,12
 func Benchmark_Stress_HTTPS_Upload_KnownSize(b *testing.B) {
 	targetURL := HttpsBackendBaseURL + "/test/upload"
 	b.SetBytes(FileSize)
@@ -130,6 +133,7 @@ func Benchmark_Stress_HTTPS_Upload_KnownSize(b *testing.B) {
 	})
 }
 
+// go test -bench=Benchmark_Stress_HTTPS_Upload_Chunked -benchtime=3s -run=^$ -v -cpu 2,6,12
 func Benchmark_Stress_HTTPS_Upload_Chunked(b *testing.B) {
 	targetURL := HttpsBackendBaseURL + "/test/upload"
 	b.SetBytes(FileSize)
@@ -148,9 +152,9 @@ func Benchmark_Stress_HTTPS_Upload_Chunked(b *testing.B) {
 }
 
 // ========== 下行压力测试 ==========
-
+// go test -bench=Benchmark_Stress_HTTP_Download_KnownSize -benchtime=3s -run=^$ -v -cpu 2,6,12
 func Benchmark_Stress_HTTP_Download_KnownSize(b *testing.B) {
-	targetURL := HttpBackendBaseURL + "/test/download?file=large_1m.bin"
+	targetURL := HttpBackendBaseURL + "/test/download?file=large_2m.bin"
 	b.SetBytes(FileSize)
 	b.RunParallel(func(pb *testing.PB) {
 		for pb.Next() {
@@ -164,8 +168,9 @@ func Benchmark_Stress_HTTP_Download_KnownSize(b *testing.B) {
 	})
 }
 
+// go test -bench=Benchmark_Stress_HTTP_Download_Chunked -benchtime=3s -run=^$ -v -cpu 2,6,12
 func Benchmark_Stress_HTTP_Download_Chunked(b *testing.B) {
-	targetURL := HttpBackendBaseURL + "/test/download/chunked?file=large_1m.bin"
+	targetURL := HttpBackendBaseURL + "/test/download/chunked?file=large_2m.bin"
 	b.SetBytes(FileSize)
 	b.RunParallel(func(pb *testing.PB) {
 		for pb.Next() {
@@ -179,8 +184,9 @@ func Benchmark_Stress_HTTP_Download_Chunked(b *testing.B) {
 	})
 }
 
+// go test -bench=Benchmark_Stress_HTTPS_Download_KnownSize -benchtime=3s -run=^$ -v -cpu 2,6,12
 func Benchmark_Stress_HTTPS_Download_KnownSize(b *testing.B) {
-	targetURL := HttpsBackendBaseURL + "/test/download?file=large_1m.bin"
+	targetURL := HttpsBackendBaseURL + "/test/download?file=large_2m.bin"
 	b.SetBytes(FileSize)
 	b.RunParallel(func(pb *testing.PB) {
 		for pb.Next() {
@@ -194,8 +200,9 @@ func Benchmark_Stress_HTTPS_Download_KnownSize(b *testing.B) {
 	})
 }
 
+// go test -bench=Benchmark_Stress_HTTPS_Download_Chunked -benchtime=3s -run=^$ -v -cpu 2,6,12
 func Benchmark_Stress_HTTPS_Download_Chunked(b *testing.B) {
-	targetURL := HttpsBackendBaseURL + "/test/download/chunked?file=large_1m.bin"
+	targetURL := HttpsBackendBaseURL + "/test/download/chunked?file=large_2m.bin"
 	b.SetBytes(FileSize)
 	b.RunParallel(func(pb *testing.PB) {
 		for pb.Next() {

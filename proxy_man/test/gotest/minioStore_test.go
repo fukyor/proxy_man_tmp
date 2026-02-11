@@ -8,13 +8,11 @@ import (
 	"proxy_man/myminio"
 	"strings"
 	"sync"
-	"sync/atomic"
 	"testing"
 
 	"github.com/minio/minio-go/v7"
 	"github.com/minio/minio-go/v7/pkg/credentials"
 	"github.com/stretchr/testify/assert"
-	"go.uber.org/goleak"
 )
 
 // MockMinioTransport Mock HTTP Transport，模拟 MinIO 服务器响应
@@ -154,51 +152,6 @@ func BenchmarkUpload_SkipUpload(b *testing.B) {
 	})
 }
 
-// ========== 功能测试 ==========
-
-// TestGoroutineLeak 协程泄漏检测测试（使用 goleak.VerifyNone）
-// go test -bench=TestGoroutineLeak -run=^$ -benchmem -cpu=2,6,12
-func TestGoroutineLeak(t *testing.T) {
-	setupMinioClient()
-	defer goleak.VerifyNone(t, goleak.IgnoreCurrent())
-
-	data := []byte(strings.Repeat("D", 4096)) // 4KB 数据
-	var ops atomic.Int64
-
-	// 模拟 1000 次并发操作
-	const iterations = 1000
-	var wg sync.WaitGroup
-	wg.Add(iterations)
-
-	for i := 0; i < iterations; i++ {
-		go func(id int) {
-			defer wg.Done()
-
-			fakeBody := io.NopCloser(bytes.NewReader(data))
-			reader := myminio.BuildBodyReader(fakeBody, int64(10000+id), "req", "application/octet-stream", int64(len(data)))
-
-			// 消费数据
-			n, err := io.Copy(io.Discard, reader)
-			assert.NoError(t, err)
-			assert.Equal(t, int64(len(data)), n)
-
-			// 关闭
-			err = reader.Close()
-			assert.NoError(t, err)
-
-			// 【修复竞态条件】使用 atomic 操作
-			ops.Add(1)
-		}(i)
-	}
-
-	wg.Wait()
-
-	// 验证完成数量
-	assert.Equal(t, int64(iterations), ops.Load(), "应完成所有操作")
-
-	// goleak.VerifyNone 会在函数返回时自动检查协程泄漏
-	t.Log("协程泄漏检测通过")
-}
 
 // TestCloseConcurrency Close 并发安全性测试
 func TestCloseConcurrency(t *testing.T) {

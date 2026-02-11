@@ -20,6 +20,7 @@ var testDataConfigs = []TestDataConfig{
 	{"small_1k.bin", 1024, "1KB 小文件"},
 	{"medium_100k.bin", 100 * 1024, "100KB 中等文件"},
 	{"large_1m.bin", 1024 * 1024, "1MB 大文件"},
+	{"large_2m.bin", 2 * 1024 * 1024, "2MB 大文件"},
 	{"huge_5m.bin", 5 * 1024 * 1024, "5MB 超大文件"},
 	{"huge_100m.bin", 100 * 1024 * 1024, "100MB 超大文件"},
 	{"huge_200m.bin", 200 * 1024 * 1024, "200MB 超大文件"},

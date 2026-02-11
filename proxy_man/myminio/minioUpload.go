@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"io"
+	"log"
 	"os"
 	"strings"
 	"time"
@@ -112,11 +113,11 @@ func (r *bodyCaptReader) uploadToMinIO(pr *io.PipeReader) {
 
 // uploadViaTempFile 通过临时文件上传（用于未知大小的情况）
 func (r *bodyCaptReader) uploadViaTempFile(ctx context.Context, pr *io.PipeReader) (minio.UploadInfo, error) {
+	log.Panicln("触发chunkeddddddddddddddd")
 	// 使用相对路径便于调试观察
 	if err := os.MkdirAll("myminio/tmp", 0755); err != nil {
 		return minio.UploadInfo{}, fmt.Errorf("创建临时目录失败: %w", err)
 	}
-
 	tempFile, err := os.CreateTemp("myminio/tmp", "upload-*.tmp")
 	if err != nil {
 		return minio.UploadInfo{}, fmt.Errorf("创建临时文件失败: %w", err)

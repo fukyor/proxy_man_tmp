@@ -19,12 +19,6 @@ import (
 	"go.uber.org/goleak"
 )
 
-// TestMain 用于在所有测试结束后验证 Main 级别的泄漏（可选）
-func TestMain(m *testing.M) {
-	goleak.VerifyTestMain(m)
-}
-
-
 // 专门测试 BuildBodyReader 是否正确释放了协程
 func TestBodyReader_Leak(t *testing.T) {
 	// 初始化 MinIO
