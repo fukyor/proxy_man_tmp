@@ -35,94 +35,97 @@
 
     <!-- 连接表格 -->
     <div class="table-section">
-      <div class="table-container">
-        <table class="connections-table">
-          <thead>
-            <tr>
-              <th @click="handleSort('id')" class="sortable">
-                <span class="expand-header-placeholder"></span>
-                ID
-                <span class="sort-icon" v-if="sortBy === 'id'">
-                  {{ sortOrder === 'asc' ? '▲' : '▼' }}
-                </span>
-              </th>
-              <th @click="handleSort('method')" class="sortable">
-                方法
-                <span class="sort-icon" v-if="sortBy === 'method'">
-                  {{ sortOrder === 'asc' ? '▲' : '▼' }}
-                </span>
-              </th>
-              <th @click="handleSort('host')" class="sortable">
-                Host
-                <span class="sort-icon" v-if="sortBy === 'host'">
-                  {{ sortOrder === 'asc' ? '▲' : '▼' }}
-                </span>
-              </th>
-              <th @click="handleSort('url')" class="sortable">
-                URL
-                <span class="sort-icon" v-if="sortBy === 'url'">
-                  {{ sortOrder === 'asc' ? '▲' : '▼' }}
-                </span>
-              </th>
-              <th @click="handleSort('protocol')" class="sortable">
-                协议
-                <span class="sort-icon" v-if="sortBy === 'protocol'">
-                  {{ sortOrder === 'asc' ? '▲' : '▼' }}
-                </span>
-              </th>
-              <th @click="handleSort('up')" class="sortable">
-                上传
-                <span class="sort-icon" v-if="sortBy === 'up'">
-                  {{ sortOrder === 'asc' ? '▲' : '▼' }}
-                </span>
-              </th>
-              <th @click="handleSort('down')" class="sortable">
-                下载
-                <span class="sort-icon" v-if="sortBy === 'down'">
-                  {{ sortOrder === 'asc' ? '▲' : '▼' }}
-                </span>
-              </th>
-            </tr>
-          </thead>
-          <tbody>
-            <tr v-if="filteredConnections.length === 0">
-              <td colspan="7" class="no-data">
-                {{ searchQuery ? '未找到匹配的连接' : '暂无活动连接' }}
-              </td>
-            </tr>
-            <tr
-              v-for="conn in sortedConnections"
-              :key="conn.id"
-              :class="{ 'parent-row': conn.isParent, 'child-row': !conn.isParent }"
+      <div class="conn-scroller" ref="scrollerRef">
+        <!-- sticky 吸顶表头 -->
+        <div class="conn-grid-row thead-row">
+          <div @click="handleSort('id')" class="th sortable">
+            <span class="expand-header-placeholder"></span>
+            ID
+            <span class="sort-icon" v-if="sortBy === 'id'">{{ sortOrder === 'asc' ? '▲' : '▼' }}</span>
+          </div>
+          <div @click="handleSort('method')" class="th sortable">
+            方法
+            <span class="sort-icon" v-if="sortBy === 'method'">{{ sortOrder === 'asc' ? '▲' : '▼' }}</span>
+          </div>
+          <div @click="handleSort('host')" class="th sortable">
+            Host
+            <span class="sort-icon" v-if="sortBy === 'host'">{{ sortOrder === 'asc' ? '▲' : '▼' }}</span>
+          </div>
+          <div @click="handleSort('url')" class="th sortable">
+            URL
+            <span class="sort-icon" v-if="sortBy === 'url'">{{ sortOrder === 'asc' ? '▲' : '▼' }}</span>
+          </div>
+          <div @click="handleSort('protocol')" class="th sortable">
+            协议
+            <span class="sort-icon" v-if="sortBy === 'protocol'">{{ sortOrder === 'asc' ? '▲' : '▼' }}</span>
+          </div>
+          <div @click="handleSort('up')" class="th sortable">
+            上传
+            <span class="sort-icon" v-if="sortBy === 'up'">{{ sortOrder === 'asc' ? '▲' : '▼' }}</span>
+          </div>
+          <div @click="handleSort('down')" class="th sortable">
+            下载
+            <span class="sort-icon" v-if="sortBy === 'down'">{{ sortOrder === 'asc' ? '▲' : '▼' }}</span>
+          </div>
+        </div>
+
+        <!-- 空数据提示 -->
+        <div v-if="sortedConnections.length === 0" class="no-data">
+          {{ searchQuery ? '未找到匹配的连接' : '暂无活动连接' }}
+        </div>
+
+        <!-- 虚拟高度容器 -->
+        <div :style="{ position: 'relative', height: totalSize + 'px' }">
+          <div
+            v-for="virtualRow in virtualRows"
+            :key="virtualRow.key"
+            :ref="(el) => { if (el) virtualizer.measureElement(el) }"
+            :data-index="virtualRow.index"
+            :style="{
+              position: 'absolute',
+              top: 0,
+              left: 0,
+              width: '100%',
+              transform: `translateY(${virtualRow.start}px)`
+            }"
+          >
+            <div
+              class="conn-grid-row data-row"
+              :class="{
+                'parent-row': sortedConnections[virtualRow.index].isParent,
+                'child-row': !sortedConnections[virtualRow.index].isParent
+              }"
             >
-              <td>
+              <div class="td">
                 <span
-                  v-if="conn.isParent && hasChildren(conn.id)"
-                  @click.stop="toggleExpand(conn.id)"
+                  v-if="sortedConnections[virtualRow.index].isParent && hasChildren(sortedConnections[virtualRow.index].id)"
+                  @click.stop="toggleExpand(sortedConnections[virtualRow.index].id)"
                   class="expand-icon"
                 >
-                  {{ expandedIds.has(conn.id) ? '▼' : '▶' }}
+                  {{ expandedIds.has(sortedConnections[virtualRow.index].id) ? '▼' : '▶' }}
                 </span>
                 <span v-else class="expand-placeholder"></span>
-                {{ conn.id }}
-              </td>
-              <td>
-                <span class="badge method-badge" :class="getMethodClass(conn.method)">
-                  {{ conn.method }}
+                {{ sortedConnections[virtualRow.index].id }}
+              </div>
+              <div class="td">
+                <span class="badge method-badge" :class="getMethodClass(sortedConnections[virtualRow.index].method)">
+                  {{ sortedConnections[virtualRow.index].method }}
                 </span>
-              </td>
-              <td>{{ conn.host }}</td>
-              <td class="url-cell">{{ conn.url }}</td>
-              <td>
-                <span class="badge protocol-badge" :class="getProtocolClass(conn.protocol)">
-                  {{ conn.protocol }}
+              </div>
+              <div class="td">{{ sortedConnections[virtualRow.index].host }}</div>
+              <div class="td url-cell" :title="sortedConnections[virtualRow.index].url">
+                {{ sortedConnections[virtualRow.index].url }}
+              </div>
+              <div class="td">
+                <span class="badge protocol-badge" :class="getProtocolClass(sortedConnections[virtualRow.index].protocol)">
+                  {{ sortedConnections[virtualRow.index].protocol }}
                 </span>
-              </td>
-              <td>{{ formatBytes(conn.up || 0) }}</td>
-              <td>{{ formatBytes(conn.down || 0) }}</td>
-            </tr>
-          </tbody>
-        </table>
+              </div>
+              <div class="td">{{ formatBytes(sortedConnections[virtualRow.index].up || 0) }}</div>
+              <div class="td">{{ formatBytes(sortedConnections[virtualRow.index].down || 0) }}</div>
+            </div>
+          </div>
+        </div>
       </div>
     </div>
   </div>
@@ -130,6 +133,7 @@
 
 <script setup>
 import { ref, computed, onMounted, onUnmounted } from 'vue'
+import { useVirtualizer } from '@tanstack/vue-virtual'
 import { useWebSocketStore } from '@/stores/websocket'
 
 const wsStore = useWebSocketStore()
@@ -140,6 +144,7 @@ const searchQuery = ref('')
 const sortBy = ref('id')
 const sortOrder = ref('desc')
 const expandedIds = ref(new Set())
+const scrollerRef = ref(null)
 
 let unsubscribeConnections = null
 
@@ -160,40 +165,37 @@ function hasChildren(id) {
   return childrenMap.value[id] && childrenMap.value[id].length > 0
 }
 
-// 切换展开状态
+// 切换展开状态（new Set() 强制触发响应式更新）
 function toggleExpand(id) {
-  if (expandedIds.value.has(id)) {
-    expandedIds.value.delete(id)
-  } else {
-    expandedIds.value.add(id)
-  }
+  const set = expandedIds.value
+  if (set.has(id)) { set.delete(id) } else { set.add(id) }
+  expandedIds.value = new Set(set)
 }
 
 // 搜索时自动展开匹配的父节点
 function expandSearchResults() {
   if (!searchQuery.value) return
   const query = searchQuery.value.toLowerCase()
+  const set = expandedIds.value
   flatConnections.value.forEach(conn => {
     if ((conn.host?.toLowerCase().includes(query) ||
          conn.url?.toLowerCase().includes(query)) &&
         conn.parentId !== 0) {
-      expandedIds.value.add(conn.parentId)
+      set.add(conn.parentId)
     }
   })
+  expandedIds.value = new Set(set)
 }
 
 // 计算属性：过滤后的连接
 const filteredConnections = computed(() => {
-  // 获取根节点
   let roots = flatConnections.value.filter(c => c.parentId === 0)
 
   if (searchQuery.value) {
     const query = searchQuery.value.toLowerCase()
-    // 过滤匹配的根节点
     roots = roots.filter(conn =>
       conn.host?.toLowerCase().includes(query) ||
       conn.url?.toLowerCase().includes(query) ||
-      // 或者有匹配的子节点
       (childrenMap.value[conn.id] || []).some(child =>
         child.host?.toLowerCase().includes(query) ||
         child.url?.toLowerCase().includes(query)
@@ -205,19 +207,16 @@ const filteredConnections = computed(() => {
 
 // 计算属性：排序后的连接（构建扁平化列表包含展开的子节点）
 const sortedConnections = computed(() => {
-  // 对根节点排序
   const sorted = [...filteredConnections.value]
 
   sorted.sort((a, b) => {
     let aVal = a[sortBy.value]
     let bVal = b[sortBy.value]
 
-    // 处理数值类型
     if (sortBy.value === 'id' || sortBy.value === 'up' || sortBy.value === 'down') {
       aVal = Number(aVal) || 0
       bVal = Number(bVal) || 0
     } else {
-      // 字符串类型
       aVal = String(aVal || '').toLowerCase()
       bVal = String(bVal || '').toLowerCase()
     }
@@ -227,7 +226,6 @@ const sortedConnections = computed(() => {
     return 0
   })
 
-  // 构建扁平化列表（包含展开的子节点）
   const result = []
   sorted.forEach(parent => {
     result.push({ ...parent, isParent: true })
@@ -240,37 +238,52 @@ const sortedConnections = computed(() => {
   return result
 })
 
-// 计算属性：隧道数（根节点数量）
+// 虚拟滚动器（动态高度，measureElement 感知 count 变化）
+const virtualizer = useVirtualizer(
+  computed(() => ({
+    count: sortedConnections.value.length,
+    getScrollElement: () => scrollerRef.value,
+    estimateSize: () => 42,
+    overscan: 10,
+    getItemKey: (index) => {
+      const conn = sortedConnections.value[index]
+      return `${conn.isParent ? 'p' : 'c'}-${conn.id}`
+    },
+  }))
+)
+
+const virtualRows = computed(() => virtualizer.value.getVirtualItems())
+const totalSize = computed(() => virtualizer.value.getTotalSize())
+
+// 计算属性：隧道数
 const tunnelCount = computed(() => {
-  return flatConnections.value.filter(c => c.parentId === 0).length
+  return flatConnections.value.filter(c => c.parentId === 0 && c.protocol !== 'HTTP').length
 })
 
-// 计算属性：所有连接数（子节点数量）
+// 计算属性：所有连接数
 const totalConnections = computed(() => {
-  return flatConnections.value.filter(c => c.parentId !== 0).length
+  return flatConnections.value.filter(c => c.parentId !== 0 || c.protocol === 'HTTP').length
 })
 
 // 计算属性：活跃连接数
 const activeConnections = computed(() => {
-  return flatConnections.value.filter(c => c.parentId !== 0 && c.status === 'Active').length
+  return flatConnections.value.filter(c => (c.parentId !== 0 || c.protocol === 'HTTP') && c.status === 'Active').length
 })
 
 // 计算属性：已关闭连接数
 const closedConnections = computed(() => {
-  return flatConnections.value.filter(c => c.parentId !== 0 && c.status === 'Closed').length
+  return flatConnections.value.filter(c => (c.parentId !== 0 || c.protocol === 'HTTP') && c.status === 'Closed').length
 })
 
-// 更新连接列表（存储全量数据）
+// 更新连接列表（后端全量快照替换）
 function updateConnections(data) {
   flatConnections.value = data
-  // 搜索时自动展开匹配的父节点
   expandSearchResults()
 }
 
 // 处理排序
 function handleSort(field) {
   if (sortBy.value === field) {
-    // 切换排序方向
     sortOrder.value = sortOrder.value === 'asc' ? 'desc' : 'asc'
   } else {
     sortBy.value = field
@@ -321,17 +334,15 @@ function getProtocolClass(protocol) {
 
 // 生命周期钩子
 onMounted(() => {
-  // 订阅连接更新
   unsubscribeConnections = wsStore.subscribeConnections((data) => {
     updateConnections(data)
   })
 
-  // 初始化数据
+  // 初始化数据（从 store 缓存读取）
   updateConnections(wsStore.connections)
 })
 
 onUnmounted(() => {
-  // 取消订阅
   if (unsubscribeConnections) unsubscribeConnections()
 })
 </script>
@@ -339,11 +350,15 @@ onUnmounted(() => {
 <style scoped>
 .connections {
   padding: 20px;
+  height: calc(100vh - 40px);
+  display: flex;
+  flex-direction: column;
 }
 
 h1 {
   color: #cba376;
   margin-bottom: 20px;
+  flex-shrink: 0;
 }
 
 /* 统计信息栏 */
@@ -354,6 +369,7 @@ h1 {
   border-radius: 8px;
   padding: 15px 20px;
   margin-bottom: 20px;
+  flex-shrink: 0;
 }
 
 .stat-item {
@@ -373,6 +389,14 @@ h1 {
   font-weight: bold;
 }
 
+.stat-item .value.active {
+  color: #28a745;
+}
+
+.stat-item .value.closed {
+  color: #6c757d;
+}
+
 /* 操作栏 */
 .actions-bar {
   display: flex;
@@ -380,6 +404,7 @@ h1 {
   align-items: center;
   margin-bottom: 20px;
   gap: 15px;
+  flex-shrink: 0;
 }
 
 .search-input {
@@ -421,38 +446,54 @@ h1 {
 
 /* 表格部分 */
 .table-section {
+  flex: 1;
+  overflow: hidden;
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
   background: #2a2a2a;
   border-radius: 8px;
-  padding: 20px;
+  padding: 0;
 }
 
-.table-container {
-  overflow-x: auto;
-}
-
-.connections-table {
-  width: 100%;
-  border-collapse: collapse;
+/* CSS Grid 行布局 */
+.conn-grid-row {
+  display: grid;
+  grid-template-columns: 100px 80px 200px 1fr 120px 80px 80px;
+  align-items: center;
   color: #cba376;
 }
 
-.connections-table th {
+/* 虚拟滚动容器 */
+.conn-scroller {
+  flex: 1;
+  overflow: auto;
+  overscroll-behavior: contain;
+  min-height: 0;
+}
+
+/* 表头行 */
+.thead-row {
   background: #1a1a1a;
-  padding: 12px;
-  text-align: left;
-  font-weight: 600;
   border-bottom: 2px solid #cba376;
+  position: sticky;
+  top: 0;
+  z-index: 10;
+}
+
+.th {
+  padding: 12px;
+  font-weight: 600;
   white-space: nowrap;
 }
 
-.connections-table th.sortable {
+.th.sortable {
   cursor: pointer;
   user-select: none;
-  position: relative;
   transition: background 0.2s;
 }
 
-.connections-table th.sortable:hover {
+.th.sortable:hover {
   background: #252525;
 }
 
@@ -463,17 +504,16 @@ h1 {
   opacity: 0.8;
 }
 
-.connections-table td {
+/* 数据单元格 */
+.td {
   padding: 10px 12px;
   border-bottom: 1px solid #3a3a3a;
-}
-
-.connections-table tr:hover {
-  background: #333;
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
 }
 
 .url-cell {
-  max-width: 400px;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -482,7 +522,30 @@ h1 {
 .no-data {
   text-align: center;
   color: #999;
-  padding: 40px !important;
+  padding: 40px;
+}
+
+/* 父行样式 */
+.parent-row {
+  background: #2a2a2a;
+}
+
+/* 子行样式 */
+.child-row .td:first-child {
+  padding-left: 40px;
+}
+
+.child-row .td {
+  background: #222;
+}
+
+.child-row:hover .td {
+  background: #2d2d2d !important;
+}
+
+/* 数据行 hover */
+.data-row:hover .td {
+  background: #333;
 }
 
 /* 徽章样式 */
@@ -495,87 +558,31 @@ h1 {
   text-transform: uppercase;
 }
 
-/* 方法徽章 */
 .method-badge {
   min-width: 60px;
   text-align: center;
 }
 
-.method-get {
-  background: rgba(40, 167, 69, 0.2);
-  color: #28a745;
-}
+.method-get { background: rgba(40, 167, 69, 0.2); color: #28a745; }
+.method-post { background: rgba(0, 123, 255, 0.2); color: #007bff; }
+.method-put { background: rgba(255, 193, 7, 0.2); color: #ffc107; }
+.method-delete { background: rgba(220, 53, 69, 0.2); color: #dc3545; }
+.method-patch { background: rgba(108, 117, 125, 0.2); color: #6c757d; }
+.method-head { background: rgba(111, 66, 193, 0.2); color: #6f42c1; }
+.method-options { background: rgba(23, 162, 184, 0.2); color: #17a2b8; }
+.method-connect { background: rgba(203, 163, 118, 0.2); color: #cba376; }
+.method-default { background: rgba(108, 117, 125, 0.2); color: #6c757d; }
 
-.method-post {
-  background: rgba(0, 123, 255, 0.2);
-  color: #007bff;
-}
-
-.method-put {
-  background: rgba(255, 193, 7, 0.2);
-  color: #ffc107;
-}
-
-.method-delete {
-  background: rgba(220, 53, 69, 0.2);
-  color: #dc3545;
-}
-
-.method-patch {
-  background: rgba(108, 117, 125, 0.2);
-  color: #6c757d;
-}
-
-.method-head {
-  background: rgba(111, 66, 193, 0.2);
-  color: #6f42c1;
-}
-
-.method-options {
-  background: rgba(23, 162, 184, 0.2);
-  color: #17a2b8;
-}
-
-.method-connect {
-  background: rgba(203, 163, 118, 0.2);
-  color: #cba376;
-}
-
-.method-default {
-  background: rgba(108, 117, 125, 0.2);
-  color: #6c757d;
-}
-
-/* 协议徽章 */
 .protocol-badge {
   min-width: 80px;
   text-align: center;
 }
 
-.protocol-http {
-  background: rgba(0, 123, 255, 0.2);
-  color: #007bff;
-}
-
-.protocol-https {
-  background: rgba(40, 167, 69, 0.2);
-  color: #28a745;
-}
-
-.protocol-mitm {
-  background: rgba(255, 193, 7, 0.2);
-  color: #ffc107;
-}
-
-.protocol-tunnel {
-  background: rgba(108, 117, 125, 0.2);
-  color: #6c757d;
-}
-
-.protocol-default {
-  background: rgba(108, 117, 125, 0.2);
-  color: #6c757d;
-}
+.protocol-http { background: rgba(0, 123, 255, 0.2); color: #007bff; }
+.protocol-https { background: rgba(40, 167, 69, 0.2); color: #28a745; }
+.protocol-mitm { background: rgba(255, 193, 7, 0.2); color: #ffc107; }
+.protocol-tunnel { background: rgba(108, 117, 125, 0.2); color: #6c757d; }
+.protocol-default { background: rgba(108, 117, 125, 0.2); color: #6c757d; }
 
 /* 展开图标 */
 .expand-icon {
@@ -601,30 +608,22 @@ h1 {
   width: 24px;
 }
 
-/* 父行样式 */
-.parent-row {
-  background: #2a2a2a;
+/* 滚动条样式 */
+.conn-scroller::-webkit-scrollbar {
+  width: 8px;
+  height: 8px;
 }
 
-/* 子行样式 */
-.child-row {
-  background: #222;
+.conn-scroller::-webkit-scrollbar-track {
+  background: #1a1a1a;
 }
 
-.child-row td:first-child {
-  padding-left: 40px;
+.conn-scroller::-webkit-scrollbar-thumb {
+  background: #444;
+  border-radius: 4px;
 }
 
-.child-row:hover {
-  background: #2d2d2d !important;
-}
-
-/* 统计值状态样式 */
-.stat-item .value.active {
-  color: #28a745;
-}
-
-.stat-item .value.closed {
-  color: #6c757d;
+.conn-scroller::-webkit-scrollbar-thumb:hover {
+  background: #555;
 }
 </style>

@@ -23,19 +23,35 @@
     </div>
 
     <!-- 日志列表 -->
-    <div class="logs-container" ref="logsContainer">
+    <div class="logs-outer">
       <div v-if="filteredLogs.length === 0" class="no-logs">
         暂无日志
       </div>
-      <div
-        v-for="log in filteredLogs"
-        :key="log.id"
-        :class="['log-entry', `log-${log.level.toLowerCase()}`]"
-      >
-        <span class="log-time">{{ formatTime(log.time) }}</span>
-        <span class="log-level">{{ log.level }}</span>
-        <span class="log-session">{{ log.session > 0 ? `[${log.session}]` : '' }}</span>
-        <span class="log-message">{{ log.message }}</span>
+      <div class="logs-scroller" ref="scrollerRef">
+        <div
+          :style="{ position: 'relative', height: totalSize + 'px' }"
+        >
+          <div
+            v-for="virtualRow in virtualRows"
+            :key="virtualRow.key"
+            :style="{
+              position: 'absolute',
+              top: 0,
+              left: 0,
+              width: '100%',
+              transform: `translateY(${virtualRow.start}px)`
+            }"
+          >
+            <div
+              :class="['log-entry', `log-${filteredLogs[virtualRow.index].level.toLowerCase()}`]"
+            >
+              <span class="log-time">{{ formatTime(filteredLogs[virtualRow.index].time) }}</span>
+              <span class="log-level">{{ filteredLogs[virtualRow.index].level }}</span>
+              <span class="log-session">{{ filteredLogs[virtualRow.index].session > 0 ? `[${filteredLogs[virtualRow.index].session}]` : '' }}</span>
+              <span class="log-message">{{ filteredLogs[virtualRow.index].message }}</span>
+            </div>
+          </div>
+        </div>
       </div>
     </div>
   </div>
@@ -43,6 +59,7 @@
 
 <script setup>
 import { ref, computed, onMounted, onUnmounted, nextTick } from 'vue'
+import { useVirtualizer } from '@tanstack/vue-virtual'
 import { useWebSocketStore } from '@/stores/websocket'
 
 const wsStore = useWebSocketStore()
@@ -50,7 +67,7 @@ const wsStore = useWebSocketStore()
 // 响应式数据
 const selectedLevel = ref('INFO')
 const autoScroll = ref(true)
-const logsContainer = ref(null)
+const scrollerRef = ref(null)
 
 let unsubscribeLogs = null
 
@@ -66,9 +83,22 @@ const filteredLogs = computed(() => {
   })
 })
 
+// 虚拟滚动器
+const virtualizer = useVirtualizer(
+  computed(() => ({
+    count: filteredLogs.value.length,
+    getScrollElement: () => scrollerRef.value,
+    estimateSize: () => 34,
+    overscan: 20,
+    getItemKey: (index) => filteredLogs.value[index].id,
+  }))
+)
+
+const virtualRows = computed(() => virtualizer.value.getVirtualItems())
+const totalSize = computed(() => virtualizer.value.getTotalSize())
+
 // 处理级别变化
 function handleLevelChange() {
-  // 更新 WebSocket 订阅的日志级别
   wsStore.updateSubscriptions({ logLevel: selectedLevel.value })
 }
 
@@ -87,10 +117,11 @@ function toggleAutoScroll() {
 
 // 滚动到底部
 function scrollToBottom() {
-  if (!logsContainer.value || !autoScroll.value) return
-
+  if (!autoScroll.value) return
+  const len = filteredLogs.value.length
+  if (len === 0) return
   nextTick(() => {
-    logsContainer.value.scrollTop = logsContainer.value.scrollHeight
+    virtualizer.value.scrollToIndex(len - 1, { align: 'end' })
   })
 }
 
@@ -107,17 +138,13 @@ function formatTime(time) {
 
 // 生命周期钩子
 onMounted(() => {
-  // 订阅日志更新
   unsubscribeLogs = wsStore.subscribeLogs(() => {
     scrollToBottom()
   })
-
-  // 初始化日志级别
   selectedLevel.value = wsStore.subscriptions.logLevel
 })
 
 onUnmounted(() => {
-  // 取消订阅
   if (unsubscribeLogs) unsubscribeLogs()
 })
 </script>
@@ -205,18 +232,30 @@ h1 {
   background: #46b8da;
 }
 
-/* 日志容器 */
-.logs-container {
+/* 外层容器：隐藏溢出，flex 伸展 */
+.logs-outer {
   flex: 1;
   background: #1a1a1a;
   border-radius: 8px;
-  padding: 15px;
+  overflow: hidden;
+  position: relative;
+}
+
+/* 虚拟滚动容器 */
+.logs-scroller {
+  height: 100%;
   overflow-y: auto;
+  padding: 15px;
+  box-sizing: border-box;
   font-family: 'Consolas', 'Monaco', monospace;
   font-size: 0.9em;
 }
 
 .no-logs {
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  transform: translate(-50%, -50%);
   text-align: center;
   color: #999;
   padding: 40px;
@@ -228,6 +267,10 @@ h1 {
   border-bottom: 1px solid #2a2a2a;
   display: flex;
   gap: 10px;
+  box-sizing: border-box;
+  height: 34px;
+  align-items: center;
+  overflow: hidden;
 }
 
 .log-entry:hover {
@@ -237,22 +280,27 @@ h1 {
 .log-time {
   color: #888;
   min-width: 100px;
+  flex-shrink: 0;
 }
 
 .log-level {
   font-weight: bold;
   min-width: 60px;
+  flex-shrink: 0;
 }
 
 .log-session {
   color: #5bc0de;
   min-width: 50px;
+  flex-shrink: 0;
 }
 
 .log-message {
   color: #cba376;
   flex: 1;
-  word-wrap: break-word;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 /* 不同级别的颜色 */
@@ -273,20 +321,20 @@ h1 {
 }
 
 /* 滚动条样式 */
-.logs-container::-webkit-scrollbar {
+.logs-scroller::-webkit-scrollbar {
   width: 8px;
 }
 
-.logs-container::-webkit-scrollbar-track {
+.logs-scroller::-webkit-scrollbar-track {
   background: #1a1a1a;
 }
 
-.logs-container::-webkit-scrollbar-thumb {
+.logs-scroller::-webkit-scrollbar-thumb {
   background: #444;
   border-radius: 4px;
 }
 
-.logs-container::-webkit-scrollbar-thumb:hover {
+.logs-scroller::-webkit-scrollbar-thumb:hover {
   background: #555;
 }
 </style>

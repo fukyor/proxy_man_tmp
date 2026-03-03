@@ -21,8 +21,10 @@ func main() {
 	proxy.AllowHTTP2 = false
 	proxy.KeepAcceptEncoding = false
 	proxy.PreventParseHeader = false
-	proxy.KeepDestHeaders = false
-	proxy.ConnectMaintain = false
+	proxy.KeepDestHeaders = true
+	proxy.ConnectMaintain = true
+	proxy.MitmEnabled = true
+	proxy.HttpMitmNoTunnel = true
 
 	// 使用 LogCollector 包装原有 Logger
 	proxy.Logger = mproxy.NewLogCollector(proxy.Logger)
@@ -58,7 +60,7 @@ func main() {
 	mproxy.AddTrafficMonitor(proxy)
 	//mproxy.StatusChange(proxy)
 	//mproxy.HttpMitmMode(proxy)
-	mproxy.HttpsMitmMode(proxy)
+	//mproxy.HttpsMitmMode(proxy)
 
 
 	// 启动 WebSocket 控制服务

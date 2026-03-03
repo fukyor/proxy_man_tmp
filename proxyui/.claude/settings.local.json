@@ -4,7 +4,18 @@
       "Bash(go mod tidy:*)",
       "Bash(go build:*)",
       "Bash(go env:*)",
-      "Bash(set GO111MODULE=on:*)"
+      "Bash(set GO111MODULE=on:*)",
+      "mcp__gitnexus__list_repos",
+      "mcp__gitnexus__query",
+      "WebSearch",
+      "WebFetch(domain:www.npmjs.com)",
+      "WebFetch(domain:registry.npmjs.org)",
+      "WebFetch(domain:github.com)",
+      "WebFetch(domain:tanstack.com)",
+      "WebFetch(domain:raw.githubusercontent.com)",
+      "Bash(npm run:*)",
+      "mcp__gitnexus__context",
+      "mcp__gitnexus__cypher"
     ],
     "deny": [
       "Read(./node_modules/**)"

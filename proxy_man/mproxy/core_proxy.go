@@ -22,8 +22,8 @@ type CoreHttpServer struct{
 	reqHandlers []ReqHandler    // 封装请求过滤器
 	respHandlers []RespHandler	// 封装响应过滤器
 	httpsHandlers []HttpsHandler // 连接策略选择器
-	ConnectMutiDial        func(network string, addr string) (net.Conn, error) // 多级代理
-	ConnectWithReqDial func(req *http.Request, network string, addr string) (net.Conn, error) // 分流规则
+	ConnectDial        func(network string, addr string) (net.Conn, error) // 默认二级代理
+	ConnectWithReqDial func(req *http.Request, network string, addr string) (net.Conn, error) // 规则代理
 
 	ConnectionErrHandler func(conn io.Writer, ctx *Pcontext, err error)
 
@@ -33,9 +33,11 @@ type CoreHttpServer struct{
 
 	AllowHTTP2 bool
 	PreventParseHeader bool // 是否保使用用户的非标头部，默认false。除了RPC，一般不会需要非标头部
-	KeepDestHeaders bool  	// 是否保留已设置的响应头，默认false。我们通常没有自己设置响应头，都是使用resp响应头
+	KeepDestHeaders bool  	// 是否保留已设置的响应头，默认true。保证自己的响应头能够正常被添加
 	KeepAcceptEncoding bool	// 保留用户请求编码格式，默认false。除非必须要特定编码格式，否则保持为false让roundtrip决定。
 	ConnectMaintain bool 	// 是否持久维持隧道，默认false。客户端如果支持主动断开连接，则可以为ture
+	MitmEnabled         bool // MITM 全局开关，开启后根据端口自动选择 MITM 模式
+	HttpMitmNoTunnel bool // 是否在 HTTP 普通代理中使用 TCP 转发引擎（类似 HTTP-MITM）
 
 	Connections sync.Map // int64 (Session) -> *ConnectionInfo
 }
@@ -131,7 +133,6 @@ func NewCoreHttpSever() *CoreHttpServer{
 		Transport: &http.Transport{
 			TLSClientConfig: tlsClientSkipVerify,
 			//Proxy: http.ProxyFromEnvironment, //从环境变量读取http_proxy作为代理，而不使用硬编码
-			Proxy: nil,
 		},
 	}
 	return core_proxy

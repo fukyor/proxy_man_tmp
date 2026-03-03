@@ -31,46 +31,64 @@
     <!-- 连接列表区域 -->
     <div class="connections-section">
       <div class="section-header">
-        <h2>活动连接</h2>
+        <h2>活动连接 ({{ totalActiveCount }})</h2>
         <button @click="handleCloseAll" class="btn-close-all">关闭所有连接</button>
       </div>
-      <div class="table-container">
-        <table class="connections-table">
-          <thead>
-            <tr>
-              <th>ID</th>
-              <th>方法</th>
-              <th>Host</th>
-              <th>URL</th>
-              <th>协议</th>
-              <th>上传</th>
-              <th>下载</th>
-            </tr>
-          </thead>
-          <tbody>
-            <tr v-if="connections.length === 0">
-              <td colspan="7" class="no-data">暂无活跃连接</td>
-            </tr>
-            <tr v-for="conn in connections" :key="conn.id" class="clickable-row">
-              <td>{{ conn.id }}</td>
-              <td>{{ conn.method }}</td>
-              <td>{{ conn.host }}</td>
-              <td class="url-cell">{{ conn.url }}</td>
-              <td>{{ conn.protocol }}</td>
-              <td>{{ formatBytes(conn.up || 0) }}</td>
-              <td>{{ formatBytes(conn.down || 0) }}</td>
-            </tr>
-          </tbody>
-        </table>
+
+      <!-- CSS Grid + 虚拟滚动 -->
+      <div class="conn-scroller" ref="scrollerRef">
+        <!-- sticky 吸顶表头 -->
+        <div class="conn-grid-row thead-row">
+          <div class="th">ID</div>
+          <div class="th">方法</div>
+          <div class="th">Host</div>
+          <div class="th">URL</div>
+          <div class="th">协议</div>
+          <div class="th">上传</div>
+          <div class="th">下载</div>
+        </div>
+
+        <!-- 空数据提示 -->
+        <div v-if="connections.length === 0" class="no-data">暂无活跃连接</div>
+
+        <!-- 虚拟高度容器 -->
+        <div :style="{ position: 'relative', height: totalSize + 'px' }">
+          <div
+            v-for="virtualRow in virtualRows"
+            :key="virtualRow.key"
+            :style="{
+              position: 'absolute',
+              top: 0,
+              left: 0,
+              width: '100%',
+              transform: `translateY(${virtualRow.start}px)`
+            }"
+          >
+            <div class="conn-grid-row data-row">
+              <div class="td">{{ connections[virtualRow.index].id }}</div>
+              <div class="td">{{ connections[virtualRow.index].method }}</div>
+              <div class="td">{{ connections[virtualRow.index].host }}</div>
+              <div class="td url-cell" :title="connections[virtualRow.index].url">{{ connections[virtualRow.index].url }}</div>
+              <div class="td">{{ connections[virtualRow.index].protocol }}</div>
+              <div class="td">{{ formatBytes(connections[virtualRow.index].up || 0) }}</div>
+              <div class="td">{{ formatBytes(connections[virtualRow.index].down || 0) }}</div>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <!-- 查看更多 -->
+      <div v-if="totalActiveCount > OVERVIEW_MAX_DISPLAY" class="view-more">
+        <span>显示前 {{ OVERVIEW_MAX_DISPLAY }} 条，共 {{ totalActiveCount }} 条活跃连接</span>
+        <router-link to="/dashboard/connections" class="btn-view-all">查看全部连接</router-link>
       </div>
     </div>
   </div>
-
-
 </template>
 
 <script setup>
 import { ref, computed, onMounted, onUnmounted } from 'vue'
+import { useVirtualizer } from '@tanstack/vue-virtual'
 import { useWebSocketStore } from '@/stores/websocket'
 import { Chart, registerables } from 'chart.js'
 
@@ -79,27 +97,35 @@ Chart.register(...registerables)
 
 const wsStore = useWebSocketStore()
 
+const OVERVIEW_MAX_DISPLAY = 50
+
 // 响应式数据
 const chartCanvas = ref(null)
 const currentUpload = ref(0)
 const currentDownload = ref(0)
 const connections = ref([])
-const allConnections = ref([])
+const totalUpload = ref(0)
+const totalDownload = ref(0)
+const totalActiveCount = ref(0)
+const scrollerRef = ref(null)
 
 let chart = null
 let unsubscribeTraffic = null
 let unsubscribeConnections = null
 
-// 计算属性：总上传流量
-const totalUpload = computed(() => {
-  return allConnections.value.reduce((sum, conn) => sum + (conn.up || 0), 0)
-})
+// 虚拟滚动器
+const virtualizer = useVirtualizer(
+  computed(() => ({
+    count: connections.value.length,
+    getScrollElement: () => scrollerRef.value,
+    estimateSize: () => 42,
+    overscan: 10,
+    getItemKey: (index) => connections.value[index].id,
+  }))
+)
 
-// 计算属性：总下载流量
-const totalDownload = computed(() => {
-  return allConnections.value.reduce((sum, conn) => sum + (conn.down || 0), 0)
-})
-
+const virtualRows = computed(() => virtualizer.value.getVirtualItems())
+const totalSize = computed(() => virtualizer.value.getTotalSize())
 
 // 初始化图表
 function initChart() {
@@ -169,14 +195,14 @@ function updateChart(data) {
 
   currentUpload.value = data.up
   currentDownload.value = data.down
+  totalUpload.value = data.totalUp || 0
+  totalDownload.value = data.totalDown || 0
 
-  // 更新上传数据
   chart.data.datasets[0].data.push(data.up)
   if (chart.data.datasets[0].data.length > 60) {
     chart.data.datasets[0].data.shift()
   }
 
-  // 更新下载数据
   chart.data.datasets[1].data.push(data.down)
   if (chart.data.datasets[1].data.length > 60) {
     chart.data.datasets[1].data.shift()
@@ -185,16 +211,14 @@ function updateChart(data) {
   chart.update()
 }
 
-// 更新连接列表（只显示活跃状态的子节点连接）
+// 更新连接列表（只显示活跃状态的子节点连接，最多 50 条）
 function updateConnections(data) {
-  // 存储全量数据用于流量统计
-  allConnections.value = data
-  // 只显示活跃状态的子节点连接
-  connections.value = data.filter(conn =>
+  const activeChildren = data.filter(conn =>
     conn.parentId !== 0 && conn.status === 'Active'
   )
+  totalActiveCount.value = activeChildren.length
+  connections.value = activeChildren.slice(0, OVERVIEW_MAX_DISPLAY)
 }
-
 
 // 关闭所有连接
 function handleCloseAll() {
@@ -203,38 +227,34 @@ function handleCloseAll() {
 
 // 格式化字节数
 function formatBytes(bytes) {
-  if (bytes === 0) return '0 B'
+  if (!bytes || bytes <= 0) return '0 B'
   const k = 1024
-  const sizes = ['B', 'KB', 'MB', 'GB']
-  const i = Math.floor(Math.log(bytes) / Math.log(k))
+  const sizes = ['B', 'KB', 'MB', 'GB', 'TB']
+  const i = Math.min(Math.floor(Math.log(bytes) / Math.log(k)), sizes.length - 1)
   return (bytes / Math.pow(k, i)).toFixed(2) + ' ' + sizes[i]
 }
-
 
 // 生命周期钩子
 onMounted(() => {
   initChart()
 
-  // 订阅流量更新，注册流量更新回调，每次流量更新时执行
   unsubscribeTraffic = wsStore.subscribeTraffic((data) => {
     updateChart(data)
   })
 
-  // 订阅连接更新，注册连接更新回调，每次连接更新时执行
   unsubscribeConnections = wsStore.subscribeConnections((data) => {
     updateConnections(data)
   })
 
-  // 初始化数据
-  connections.value = wsStore.connections
+  // 初始化数据（从 store 缓存读取）
+  if (wsStore.connections.length > 0) {
+    updateConnections(wsStore.connections)
+  }
 })
 
 onUnmounted(() => {
-  // 取消订阅
   if (unsubscribeTraffic) unsubscribeTraffic()
   if (unsubscribeConnections) unsubscribeConnections()
-
-  // 销毁图表
   if (chart) {
     chart.destroy()
   }
@@ -322,35 +342,54 @@ h2 {
   background: #c9302c;
 }
 
-.table-container {
-  overflow-x: auto;
-}
-
-.connections-table {
-  width: 100%;
-  border-collapse: collapse;
+/* CSS Grid 行布局 */
+.conn-grid-row {
+  display: grid;
+  grid-template-columns: 80px 80px 180px 1fr 100px 100px 100px;
+  align-items: center;
   color: #cba376;
 }
 
-.connections-table th {
-  background: #1a1a1a;
-  padding: 12px;
-  text-align: left;
-  font-weight: 600;
-  border-bottom: 2px solid #cba376;
+/* 虚拟滚动容器 */
+.conn-scroller {
+  max-height: 400px;
+  overflow: auto;
+  overscroll-behavior: contain;
+  border-radius: 4px;
 }
 
-.connections-table td {
-  padding: 10px 12px;
+/* 表头行 */
+.thead-row {
+  background: #1a1a1a;
+  border-bottom: 2px solid #cba376;
+  position: sticky;
+  top: 0;
+  z-index: 10;
+}
+
+.th {
+  padding: 12px;
+  font-weight: 600;
+  white-space: nowrap;
+}
+
+/* 数据行 */
+.data-row {
   border-bottom: 1px solid #3a3a3a;
 }
 
-.connections-table tr:hover {
+.data-row:hover .td {
   background: #333;
 }
 
+.td {
+  padding: 10px 12px;
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+
 .url-cell {
-  max-width: 300px;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -359,115 +398,53 @@ h2 {
 .no-data {
   text-align: center;
   color: #999;
-  padding: 40px !important;
+  padding: 40px;
 }
 
-/* 表格行可点击样式 */
-.clickable-row {
-  cursor: pointer;
-  transition: background-color 0.2s;
-}
-
-.clickable-row:hover {
-  background-color: #3a3a3a !important;
-}
-
-/* 侧边栏遮罩层 */
-.sidebar-overlay {
-  position: fixed;
-  top: 0;
-  left: 0;
-  right: 0;
-  bottom: 0;
-  background-color: rgba(0, 0, 0, 0.5);
-  z-index: 1000;
-  display: flex;
-  justify-content: flex-end;
-}
-
-
-.btn-close {
-  background: transparent;
-  border: none;
-  color: #cba376;
-  font-size: 2em;
-  cursor: pointer;
-  line-height: 1;
-  padding: 0;
-  width: 30px;
-  height: 30px;
+/* 查看更多 */
+.view-more {
   display: flex;
   align-items: center;
-  justify-content: center;
-  transition: color 0.3s;
-}
-
-.btn-close:hover {
-  color: #fff;
-}
-
-
-/* 隧道信息区 */
-.tunnel-info {
-  background: #1a1a1a;
-  border-radius: 8px;
-  padding: 15px;
-  margin-bottom: 20px;
-}
-
-.info-row {
-  display: flex;
   justify-content: space-between;
-  padding: 8px 0;
-  border-bottom: 1px solid #3a3a3a;
-}
-
-.info-row:last-child {
-  border-bottom: none;
-}
-
-.info-row .label {
-  color: #999;
-  font-size: 0.9em;
-}
-
-.info-row .value {
-  color: #cba376;
-  font-weight: 500;
-}
-
-/* 流量统计区 */
-.traffic-summary {
+  margin-top: 12px;
+  padding: 10px 12px;
   background: #1a1a1a;
-  border-radius: 8px;
-  padding: 15px;
-  margin-bottom: 20px;
-}
-
-.traffic-summary h4 {
-  color: #cba376;
-  margin: 0 0 15px 0;
-  font-size: 1.1em;
-}
-
-.traffic-row {
-  display: flex;
-  justify-content: space-between;
-  padding: 8px 0;
-  border-bottom: 1px solid #3a3a3a;
-}
-
-.traffic-row:last-child {
-  border-bottom: none;
-}
-
-.traffic-row .label {
-  color: #999;
+  border-radius: 4px;
   font-size: 0.9em;
+  color: #999;
 }
 
-.traffic-row .value {
+.btn-view-all {
   color: #cba376;
-  font-weight: 600;
+  text-decoration: none;
+  padding: 6px 14px;
+  border: 1px solid #cba376;
+  border-radius: 4px;
+  font-size: 0.9em;
+  transition: all 0.2s;
+  white-space: nowrap;
+}
+
+.btn-view-all:hover {
+  background: rgba(203, 163, 118, 0.15);
+}
+
+/* 滚动条样式 */
+.conn-scroller::-webkit-scrollbar {
+  width: 8px;
+  height: 8px;
+}
+
+.conn-scroller::-webkit-scrollbar-track {
+  background: #1a1a1a;
+}
+
+.conn-scroller::-webkit-scrollbar-thumb {
+  background: #444;
+  border-radius: 4px;
+}
+
+.conn-scroller::-webkit-scrollbar-thumb:hover {
+  background: #555;
 }
 </style>

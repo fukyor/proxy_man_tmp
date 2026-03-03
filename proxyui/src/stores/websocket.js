@@ -19,10 +19,12 @@ export const useWebSocketStore = defineStore('websocket', () => {
   const connections = ref([])      // 当前连接列表
   const logs = ref([])            // 日志列表
   const mitmExchanges = ref([])   // MITM 交换记录
+  const apiUrl = ref('')           // API 基础地址（用于下载等 HTTP 请求）
 
-  const MAX_HISTORY = 60
+  const MAX_HISTORY = 60  // 最近 60 秒流量历史
   const MAX_LOGS = 500
-  const MAX_MITM_EXCHANGES = 1000
+  const MAX_MITM_EXCHANGES = 2000
+  const MAX_SNAPSHOT_CONNECTIONS = 3000  // 详细连接界面只展示前3000条连接
 
   // ==================== 订阅者回调 ====================
   const trafficSubscribers = ref(new Set())
@@ -37,11 +39,13 @@ export const useWebSocketStore = defineStore('websocket', () => {
    * @param {string} apiUrl - API 基础地址（如 http://127.0.0.1:8000）
    * @param {string} secret - 密钥
    */
-  function connect(apiUrl, secret) {
+  function connect(apiUrlParam, secret) {
     if (socket.value) disconnect()
 
-    const wsProtocol = apiUrl.startsWith('https') ? 'wss:' : 'ws:'
-    const wsHost = apiUrl.replace(/^https?:\/\//, '')
+    apiUrl.value = apiUrlParam
+
+    const wsProtocol = apiUrlParam.startsWith('https') ? 'wss:' : 'ws:'
+    const wsHost = apiUrlParam.replace(/^https?:\/\//, '')
     const wsUrl = `${wsProtocol}//${wsHost}/start?token=${secret || ''}`
 
     socket.value = new WebSocket(wsUrl)
@@ -62,7 +66,7 @@ export const useWebSocketStore = defineStore('websocket', () => {
       console.log('WebSocket 连接已关闭')
       // 5 秒后自动重连
       setTimeout(() => {
-        if (!isConnected.value) connect(apiUrl, secret)
+        if (!isConnected.value) connect(apiUrlParam, secret)
       }, 5000)
     }
 
@@ -133,13 +137,23 @@ export const useWebSocketStore = defineStore('websocket', () => {
       case 'connections':
         handleConnections(msg.data)
         break
-      case 'log':
-        handleLog(msg.data)
+      case 'log_batch':
+        handleLogBatch(msg.data)
         break
-      case 'mitm_exchange':
-        handleMITMExchange(msg.data)
+      case 'mitm_exchange_batch':
+        handleMITMExchangeBatch(msg.data)
         break
     }
+  }
+
+  function handleMITMExchangeBatch(dataArray) {
+    if (!dataArray || dataArray.length === 0) return
+    const newExchanges = dataArray.map(buildExchangeObject)
+    const updated = mitmExchanges.value.concat(newExchanges)
+    mitmExchanges.value = updated.length > MAX_MITM_EXCHANGES
+      ? updated.slice(-MAX_MITM_EXCHANGES)
+      : updated
+    mitmSubscribers.value.forEach(cb => cb())
   }
 
   /**
@@ -163,31 +177,43 @@ export const useWebSocketStore = defineStore('websocket', () => {
    */
   function handleConnections(data) {
     //console.log(JSON.stringify(data, null, 2));
-    // 通知所有订阅者，订阅者就是不同的组件，它们把回调函数预先注册到trafficSubscribers
-    connectionsSubscribers.value.forEach(cb => cb(data))
+    const safeData = data.length > MAX_SNAPSHOT_CONNECTIONS
+      ? data.slice(0, MAX_SNAPSHOT_CONNECTIONS)
+      : data
+    connections.value = safeData  // 写入 ref，供组件初始化时读取
+    connectionsSubscribers.value.forEach(cb => cb(safeData))
   }
 
   /**
-   * 处理日志数据
-   * @param {Object} data - 日志数据 { level, session, message, time }
+   * 批量处理日志数据，单次赋值触发一次 Vue 响应式更新
+   * @param {Array} dataArray - 日志数组
    */
-  function handleLog(data) {
-    const item = { ...data, id: Math.random().toString(36).slice(2) }
-    logs.value.push(item)
-    if (logs.value.length > MAX_LOGS) {
-      logs.value.shift()
+  function handleLogBatch(dataArray) {
+    if (!dataArray || dataArray.length === 0) return
+
+    const newLogs = dataArray.map(data => ({
+      ...data,
+      id: Math.random().toString(36).slice(2)
+    }))
+
+    const updatedLogs = logs.value.concat(newLogs)
+
+    if (updatedLogs.length > MAX_LOGS) {
+      logs.value = updatedLogs.slice(-MAX_LOGS)
+    } else {
+      logs.value = updatedLogs
     }
-    // 通知所有订阅者
-    logsSubscribers.value.forEach(cb => cb(item))
+
+    logsSubscribers.value.forEach(cb => cb())
   }
 
   /**
-   * 处理 MITM 交换数据
-   * @param {Object} data - MITM 交换数据
+   * 将原始数据转换为 exchange 对象（纯函数）
+   * @param {Object} data - 原始 MITM 数据
+   * @returns {Object} 扁平化的 exchange 对象
    */
-  function handleMITMExchange(data) {
-    console.log(JSON.stringify(data, null, 2));
-    const exchange = {
+  function buildExchangeObject(data) {
+    return {
       // 元数据
       id: data.id,
       sessionId: data.sessionId,
@@ -203,22 +229,30 @@ export const useWebSocketStore = defineStore('websocket', () => {
       requestHeaders: data.request?.header || {},
       requestSize: data.request?.sumSize || 0,
 
+      // 请求体 MinIO 信息
+      reqBodyKey: data.request?.bodyKey || '',
+      reqBodySize: data.request?.bodySize || 0,
+      reqBodyUploaded: data.request?.bodyUploaded || false,
+      reqContentType: data.request?.contentType || '',
+      reqBodyError: data.request?.bodyError || '',
+
       // 扁平化响应字段
       statusCode: data.response?.statusCode || 0,
       status: data.response?.status || '',
       responseHeaders: data.response?.header || {},
       responseSize: data.response?.sumSize || 0,
 
+      // 响应体 MinIO 信息
+      respBodyKey: data.response?.bodyKey || '',
+      respBodySize: data.response?.bodySize || 0,
+      respBodyUploaded: data.response?.bodyUploaded || false,
+      respContentType: data.response?.contentType || '',
+      respBodyError: data.response?.bodyError || '',
+
       // 衍生属性
       hasResponse: !!(data.response && data.response.statusCode),
       hasError: !!data.error
     }
-
-    mitmExchanges.value.push(exchange)
-    if (mitmExchanges.value.length > MAX_MITM_EXCHANGES) {
-      mitmExchanges.value.shift()
-    }
-    mitmSubscribers.value.forEach(cb => cb(exchange))
   }
 
   // ==================== 订阅方法 ====================
@@ -287,6 +321,7 @@ export const useWebSocketStore = defineStore('websocket', () => {
     connections,
     logs,
     mitmExchanges,
+    apiUrl,
     connect,
     disconnect,
     updateSubscriptions,
