@@ -15,7 +15,9 @@
       "WebFetch(domain:raw.githubusercontent.com)",
       "Bash(npm run:*)",
       "mcp__gitnexus__context",
-      "mcp__gitnexus__cypher"
+      "mcp__gitnexus__cypher",
+      "mcp__gitnexus__impact",
+      "Bash(npx vue-tsc:*)"
     ],
     "deny": [
       "Read(./node_modules/**)"

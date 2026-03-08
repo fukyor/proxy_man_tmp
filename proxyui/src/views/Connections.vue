@@ -67,6 +67,7 @@
             下载
             <span class="sort-icon" v-if="sortBy === 'down'">{{ sortOrder === 'asc' ? '▲' : '▼' }}</span>
           </div>
+          <div class="th"></div>
         </div>
 
         <!-- 空数据提示 -->
@@ -123,6 +124,14 @@
               </div>
               <div class="td">{{ formatBytes(sortedConnections[virtualRow.index].up || 0) }}</div>
               <div class="td">{{ formatBytes(sortedConnections[virtualRow.index].down || 0) }}</div>
+              <div class="td action-cell">
+                <span
+                  v-if="sortedConnections[virtualRow.index].status === 'Active'"
+                  class="btn-close-conn"
+                  @click.stop="handleCloseOne(sortedConnections[virtualRow.index].id)"
+                  title="关闭此连接"
+                >✕</span>
+              </div>
             </div>
           </div>
         </div>
@@ -152,7 +161,7 @@ let unsubscribeConnections = null
 const childrenMap = computed(() => {
   const map = {}
   flatConnections.value.forEach(conn => {
-    if (conn.parentId !== 0) {
+    if (conn.parentId !== 0 && conn.parentId !== conn.id) {
       if (!map[conn.parentId]) map[conn.parentId] = []
       map[conn.parentId].push(conn)
     }
@@ -189,7 +198,7 @@ function expandSearchResults() {
 
 // 计算属性：过滤后的连接
 const filteredConnections = computed(() => {
-  let roots = flatConnections.value.filter(c => c.parentId === 0)
+  let roots = flatConnections.value.filter(c => c.parentId === 0 || c.parentId === c.id)
 
   if (searchQuery.value) {
     const query = searchQuery.value.toLowerCase()
@@ -243,7 +252,7 @@ const virtualizer = useVirtualizer(
   computed(() => ({
     count: sortedConnections.value.length,
     getScrollElement: () => scrollerRef.value,
-    estimateSize: () => 42,
+    estimateSize: () => 60,
     overscan: 10,
     getItemKey: (index) => {
       const conn = sortedConnections.value[index]
@@ -257,7 +266,7 @@ const totalSize = computed(() => virtualizer.value.getTotalSize())
 
 // 计算属性：隧道数
 const tunnelCount = computed(() => {
-  return flatConnections.value.filter(c => c.parentId === 0 && c.protocol !== 'HTTP').length
+  return flatConnections.value.filter(c => (c.parentId === 0 || c.parentId === c.id) && c.protocol !== 'HTTP').length
 })
 
 // 计算属性：所有连接数
@@ -294,6 +303,11 @@ function handleSort(field) {
 // 关闭所有连接
 function handleCloseAll() {
   wsStore.closeAllConnections()
+}
+
+// 关闭单条连接
+function handleCloseOne(id) {
+  wsStore.closeConnection(id)
 }
 
 // 格式化字节数
@@ -459,8 +473,8 @@ h1 {
 /* CSS Grid 行布局 */
 .conn-grid-row {
   display: grid;
-  grid-template-columns: 100px 80px 200px 1fr 120px 80px 80px;
-  align-items: center;
+  grid-template-columns: minmax(80px, 0.8fr) minmax(60px, 0.8fr) minmax(100px, 1.5fr) minmax(150px, 3fr) minmax(80px, 1fr) minmax(60px, 0.8fr) minmax(60px, 0.8fr) 50px;
+  align-items: flex-start;
   color: #cba376;
 }
 
@@ -509,14 +523,14 @@ h1 {
   padding: 10px 12px;
   border-bottom: 1px solid #3a3a3a;
   overflow: hidden;
-  white-space: nowrap;
-  text-overflow: ellipsis;
+  white-space: normal;
+  word-break: break-all;
 }
 
 .url-cell {
   overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
+  white-space: normal;
+  word-break: break-all;
 }
 
 .no-data {
@@ -625,5 +639,32 @@ h1 {
 
 .conn-scroller::-webkit-scrollbar-thumb:hover {
   background: #555;
+}
+
+/* 关闭单条连接按钮 */
+.action-cell {
+  display: flex !important;
+  justify-content: center;
+  padding: 7px 0 !important;
+}
+
+.btn-close-conn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 26px;
+  height: 26px;
+  border-radius: 50%;
+  color: #dc3545;
+  cursor: pointer;
+  font-size: 16px;
+  font-weight: 900;
+  line-height: 1;
+  transition: all 0.2s;
+}
+
+.btn-close-conn:hover {
+  background: rgba(220, 53, 69, 0.2);
+  color: #ff4d4d;
 }
 </style>

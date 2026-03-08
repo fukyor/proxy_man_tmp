@@ -1,7 +1,7 @@
 <!-- gitnexus:start -->
 # GitNexus MCP
 
-This project is indexed by GitNexus as **proxyui** (49 symbols, 67 relationships, 4 execution flows).
+This project is indexed by GitNexus as **proxyui** (55 symbols, 81 relationships, 4 execution flows).
 
 ## Always Start Here
 

@@ -1,181 +1,170 @@
-# Overview.vue 和 Connections.vue 性能优化实施计划
+# 单一可执行文件跨平台部署方案 (Go + Vue)
 
-## 上下文
+本方案旨在解决将 `proxy_man` (Go 后端) 和 `proxyui` (Vue 前端) 打包为**单个可执行文件**的需求，使其无论是在 Windows 还是 Linux 下都能做到“一键运行”，无需提前部署 Nginx 或单独启动前端服务。
 
-**问题描述**: Overview.vue（活动连接部分）和 Connections.vue（详细连接）在高并发大流量场景下存在严重性能问题，导致浏览器卡顿。
+## 核心思路
 
-**问题根因**:
-
-1. 使用原生 `<table>` + `v-for` 全量渲染所有连接数据
-2. 无最大数量限制，万级连接会全部挂载到 DOM
-3. WebSocket Store 的 `connections` 数据没有设置上限（对比 logs 有 MAX_LOGS=500，mitm 有 MAX_MITM_EXCHANGES=2000）
-
-**参考实现**: Logs.vue 和 MITM.vue 已完美使用 `@tanstack/vue-virtual` 实现虚拟滚动，且依赖已安装（package.json:17）。
+自 Go 1.16 版本起，原生提供了 `//go:embed` 特性。它能够在 Go 语言编译期，将前端构建生成的静态 HTML、JS、CSS、图片等文件直接打包内嵌到编译后的二进制文件中。之后通过 Go 自身的 HTTP 服务直接在内存中对外提供前端文件访问。最后通过 Go 的交叉编译特性，分别打包出 `.exe` (Win) 和无后缀可执行程序 (Linux)。
 
 ---
 
-## 修订后的实施计划
+## 实施步骤详情
 
-### 第一步：WebSocket Store 层面添加数据上限
+### 1. 前端（proxyui）打包部署
 
-**文件**: `src/stores/websocket.js`
+在 Vue 项目 (`proxyui`) 中执行标准的生产环境构建：
 
-**改动**:
-
-1. 添加 `MAX_CONNECTIONS = 1000` 常量（与 MAX_LOGS、MAX_MITM_EXCHANGES 保持一致）
-2. 在 `handleConnections` 方法中添加数量限制逻辑（参考 `handleLogBatch` 的实现）
-
-**原因**: 即使前端使用虚拟滚动，数据层也应该有上限作为兜底保护。
-
----
-
-### 第二步：Overview.vue 活动连接改造
-
-**文件**: `src/views/Overview.vue`
-
-**改动方案**:
-
-1. 移除原生 `<table>` 结构（第38-64行）
-2. 引入 `@tanstack/vue-virtual` 的 `useVirtualizer`
-3. 使用 CSS Grid 模拟表格布局（参考 MITM.vue:544 的 grid-template-columns）
-4. 限制显示数量为 50 条，提供"查看更多"按钮跳转到 Connections.vue
-
-**关键实现细节**:
-
-```js
-// 虚拟滚动器配置
-const virtualizer = useVirtualizer(
-  computed(() => ({
-    count: displayConnections.value.length,  // 最多 50 条
-    getScrollElement: () => scrollerRef.value,
-    estimateSize: () => 42,  // 固定行高
-    overscan: 10,
-    getItemKey: (index) => displayConnections.value[index].id,
-  }))
-)
-
-// 限制显示数量
-const displayConnections = computed(() =>
-  connections.value.slice(0, 50)
-)
+```bash
+cd e:\D\zuoyewenjian\MyProject\proxyui
+npm run build
 ```
 
-**CSS Grid 定义**:
+这会在 `proxyui` 目录下生成一个 `dist` 文件夹，里面包含了所有前端静态资源。
 
-```css
-.connections-grid-row {
-  display: grid;
-  grid-template-columns: 80px 80px 180px 1fr 100px 100px 100px;
-  align-items: center;
-  color: #cba376;
+### 2. 将静态文件转移或映射至后端
+
+我们需要将 `dist` 文件夹放置在 Go 项目能够读取并 embed 的目录下。
+建议在 `proxy_man` 根目录下创建一个 `public` 文件夹，然后将上一步生成的 `dist` 文件夹复制进去（路径为 `proxy_man/public/dist/`）。
+*提示：这一步后续都可以通过自动化脚本一键完成。*
+
+### 3. 修改后端代码适配前端嵌入 (重点)
+
+#### 3.1 引入 `//go:embed`
+
+在 [proxy_man/proxysocket/proxy.go](file:///e:/D/zuoyewenjian/MyProject/proxy_man/proxysocket/proxy.go) 中引入 `embed` 并在包级别声明静态资源：
+
+```go
+package proxysocket
+
+import (
+    "embed"
+    "io/fs"
+    "net/http"
+    "path"
+    "strings"
+)
+
+//go:embed public/dist/*
+var embeddedFiles embed.FS
+```
+
+#### 3.2 API、WebSocket 与静态文件的路由分发 (Multiplexing)
+
+Go 语言的 `http.ServeMux` 具有**最长前缀匹配优先**的特性。由于控制台和前后端通讯都在 `8000` 端口下，我们需要处理好流量剥离的问题。
+
+处理流向设计如下：
+
+1. **WebSocket 连接 (`/start`)**：前端发起 WebSocket 连接时精确命中，执行原有的 [handleWebSocket](file:///e:/D/zuoyewenjian/MyProject/proxy_man/proxysocket/proxy.go#99-158) 逻辑。
+2. **后端 API 请求 (`/api/...`)**：前端发起 `fetch` 或 `axios` 等 HTTP 请求（例如获取配置 `/api/config`、下载请求 `/api/storage/download`），将会精确或按前缀命中现有接口层。
+3. **前端页面和静态资源 (`/`)**：当请求**不匹配以上任何一条规则时**（比如请求加载 `/assets/main.js`，或者是你刷新了 `/dashboard/connections`），才会被路由至最低级匹配路径 `/` 中，进入静态文件服务兜底逻辑：
+   - 检查 `dist` 中是否存在这个物理文件（如下载 CSS/JS）。如果有则直接返回文件流。
+   - 如果不存在（像刚才讨论的处理 Vue History 虚拟路由的情形），统一回退返回 [index.html](file:///e:/D/zuoyewenjian/MyProject/proxyui/index.html) 的内容，把路由控制权交还给 Vue Router。
+
+只要注册路由的顺序不干扰，它们就能在同一个端口下和谐共处。我们在 [proxy.go](file:///e:/D/zuoyewenjian/MyProject/proxy_man/proxysocket/proxy.go) 中的 `http.NewServeMux()` 修改将如下所示：
+
+```go
+func (ws *WebsocketServer) StartControlServer(cm *mproxy.ConfigManager, router *mproxy.Router) bool {
+    // ... 前置初始化
+    mux := http.NewServeMux()
+    
+    // 1. 保留现有的 API 和 WS 高优先级路由
+    mux.HandleFunc("/start", ws.loginHandler(ws.handleWebSocket))
+    mux.HandleFunc("/api/storage/download", myminio.HandleDownload)
+    mux.HandleFunc("/api/config", ws.handleConfig(cm, router))
+
+    // 2. 提取内嵌静态文件系统的根目录
+    distFS, err := fs.Sub(embeddedFiles, "public/dist")
+    if err != nil {
+        log.Fatal("无法加载前端静态资源")
+    }
+    fileServer := http.FileServer(http.FS(distFS))
+    
+    // 3. 注册根路径 `/` 的兜底拦截器（接管 Vue 路由及所有静态资源请求）
+    mux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
+        // [拦截回退逻辑代码...]
+        // -> 如果请求静态资源则 ServeFile
+        // -> 如果没找到则强行输出 index.html
+    })
+    
+    // ... 后续启动服务
 }
 ```
 
----
+### 4. 自动化构建与跨平台编译脚本
 
-### 第三步：Connections.vue 详细连接改造
+为了避免每次都要手动 `npm run build`、复制文件夹、针对不同平台编译，我们可以写一个跨平台的脚本。
+更关键的是，我们要保证**目标服务器零依赖部署**，所以我们要采用关闭 CGO 绑定的纯静态编译方式。
 
-**文件**: `src/views/Connections.vue`
+#### 运行环境要求（零依赖）
 
-**改动方案**:
+- **开发机（打包环境）：** 需要完整的 Go 和 Node.js/npm 环境进行构建。
+- **目标服务器（运行环境）：** **没有任何环境要求。** 不需要 Node.js，不需要 npm，不需要 Nginx，不需要预装 Go 运行环境，甚至不需要动态链接 C 语言标准库 (`libc`)。只要是一台普通装有 Windows 或 Linux 操作系统的裸机（或容器），把构建出来的单文件拖进去，就能直接运行。
 
-1. 移除原生 `<table>` 结构（第39-125行）
-2. 引入 `@tanstack/vue-virtual`
-3. 使用 CSS Grid 替代表格布局
-4. 保持父子展开功能，需要处理动态高度
+#### 编译命令示例
 
-**关键实现细节**:
+**编译为 Windows 版本 (完全静态打包)**
 
-#### 3.1 虚拟滚动器配置（动态高度）
-
-```js
-const virtualizer = useVirtualizer(
-  computed(() => ({
-    count: flatConnections.value.length,
-    getScrollElement: () => scrollerRef.value,
-    estimateSize: () => 42,  // 基础行高
-    overscan: 10,
-    getItemKey: (index) => flatConnections.value[index].id,
-  }))
-)
+```bash
+cd proxy_man
+set GOOS=windows
+set GOARCH=amd64
+set CGO_ENABLED=0
+go build -ldflags="-w -s" -o proxy_man_win.exe main.go
 ```
 
-#### 3.2 动态高度测量（参考 MITM.vue:82）
+**编译为 Linux 版本 (完全静态打包)**
 
-```html
-<div
-  v-for="virtualRow in virtualRows"
-  :key="virtualRow.key"
-  :ref="(el) => { if (el) virtualizer.measureElement(el) }"
-  :data-index="virtualRow.index"
-  ...
+```bash
+cd proxy_man
+set GOOS=linux
+set GOARCH=amd64
+set CGO_ENABLED=0
+go build -ldflags="-w -s -extldflags '-static'" -o proxy_man_linux main.go
+```
+
+*(注：`-ldflags="-w -s"` 用于去除符号表和调试信息以减小可执行文件体积。对于 Linux `extldflags '-static'` 进一步确保完全静态链接没有任何 libc 依赖。)*
+
+---
+
+## 补充说明：端口角色分离
+
+打包后无论是 Windows 还是 Linux 平台的单文件程序，在运行时会同时开启两个独立的端口，各自负责不同的流量，确保互不干扰：
+
+1. **代理服务器端口（按 [config.json](file:///e:/D/zuoyewenjian/MyProject/proxy_man/config.json) 设定，如默认的 `8080`）：** 
+   仅接受真实设备的 HTTP/HTTPS 代理请求，承担网络抓包、拦截及代理转发职责。没有任何前端页面的网络包会干扰此处。
+2. **管理面板端口（目前的 `:8000` 端口）：**
+   仅处理基于浏览器的面板访问请求（[index.html](file:///e:/D/zuoyewenjian/MyProject/proxyui/index.html)）、Vue 页面静态资源下发，以及面板控制通讯（WebSocket `/start` 和 `/api/config` 接口）。
+
+即使物理上只剩下一个 `.exe` 可执行文件，它内部依然会分别启动两个不同的 `http.Server`，两者的网络流量各走各的门。
+
+---
+
+## 补充说明：开发模式与生产模式互不干扰（前后端分离开发依然可用）
+
+打包方案**完全不会**影响你现有的“前后端分离”开发体验。引入 `//go:embed` 仅仅是利用 Go 在生产环境中额外托管了一份静态文件，它不会改变任何现有的 API 和 WebSocket 逻辑。
+
+按照本方案修改后，在你的日常开发过程中：
+
+1. **启动后端：** 你依然像以前一样运行 `go run main.go`。由于开启了跨域 (CORS) 支持并且 8000 端口完整保留了所有 API，后端就像一个独立的服务正常待命。
+2. **启动前端热重载：** 你依然可以在 `proxyui` 目录下执行 `npm run dev`，启动类似于 `localhost:5173` 的开发服务器。
+3. **联调工作：** 运行在 `5173` 端口的 Vue 开发服务器，依然可以向 `8000` 端口发送 API 抓取或 WebSocket 连接。我们保留了 `corsMiddleware` 允许跨域。
+
+**结论：** 
+
+- **开发时（Dev）**，你依旧进行着前后端完全分离的工作，享受前端极速热更新（HMR）。
+- **发布时（Prod）**，你只需要执行打包脚本，生成一个单文件交给用户，用户无需启动前端服务也可以直接在 8000 端口上浏览并管理代理面板。
+
+---
+
+## User Review Required
+
+> [!IMPORTANT]
+> **我们需要对代码做以下更改以达成以上方案：**
 >
-```
-
-#### 3.3 扁平化数据处理
-
-保持现有的 `sortedConnections` computed 逻辑，但其结果直接作为虚拟列表的数据源。
-
-#### 3.4 展开状态维护
-
-保持现有的 `expandedIds` Set 结构，每次展开/收起时触发虚拟列表重新计算高度。
-
-**CSS Grid 定义**:
-
-```css
-.connections-grid-row {
-  display: grid;
-  grid-template-columns: 80px 80px 180px 1fr 100px 100px 100px;
-  align-items: center;
-  color: #cba376;
-}
-```
-
----
-
-## 关键文件清单
-
-| 文件                        | 改动类型 | 说明                            |
-| --------------------------- | -------- | ------------------------------- |
-| `src/stores/websocket.js`   | 修改     | 添加 MAX_CONNECTIONS 限制       |
-| `src/views/Overview.vue`    | 重构     | table → 虚拟滚动 + 50条限制     |
-| `src/views/Connections.vue` | 重构     | table → 虚拟滚动 + 保持展开功能 |
-
----
-
-## 参考文件（复用实现）
-
-| 参考文件                     | 可复用的实现                 |
-| ---------------------------- | ---------------------------- |
-| `src/views/Logs.vue:62-98`   | useVirtualizer 基础配置      |
-| `src/views/MITM.vue:233-311` | 虚拟滚动 + CSS Grid 表格布局 |
-| `src/views/MITM.vue:542-557` | CSS Grid 列定义              |
-| `src/views/MITM.vue:82`      | 动态高度 measureElement 用法 |
-| `src/views/MITM.vue:369-378` | 展开/收起状态维护            |
-
----
-
-## 验证方法
-
-1. **开发服务器测试**: `npm run dev`
-2. **模拟高并发**: 使用后端推送 1000+ 连接数据
-3. **性能指标**:
-   - 打开 Chrome DevTools → Performance 录制
-   - 滚动列表，FPS 应保持 60
-   - Memory 面板，DOM 节点数量应稳定在 ~100（而非全量）
-
-4. **功能验证**:
-   - Overview.vue 显示最多 50 条，点击"查看更多"跳转
-   - Connections.vue 父子展开/收起正常工作
-   - 搜索、排序功能保持正常
-
----
-
-## 与原计划的差异说明
-
-| 原计划建议                        | 修订方案                       | 原因                                 |
-| --------------------------------- | ------------------------------ | ------------------------------------ |
-| Overview 使用虚拟滚动或 50 条限制 | 虚拟滚动 + 50 条限制（双保险） | 50 条原生 table 仍有性能开销         |
-| shallowRef 替代 ref               | 不需要                         | 虚拟滚动已解决渲染性能问题           |
-| 未提及 Store 层优化               | 添加 MAX_CONNECTIONS           | 作为兜底保护，与其他数据类型保持一致 |
-| 未详细说明动态高度处理            | 增加 measureElement 说明       | Connections 有展开功能，需要动态高度 |
+> 1. 修改 [proxy_man/proxysocket/proxy.go](file:///e:/D/zuoyewenjian/MyProject/proxy_man/proxysocket/proxy.go)，注入 `embed.FS` 并重写 `http.NewServeMux()` 以支持 `history mode` 静态文件服务。
+> 2. 为你提供一份自动化 `build.bat` 或 `build.ps1` 脚本，将 npm build 和 go build 集成到一起，实现真正的**一键跨平台打包**。
+>
+> **请确认：**
+>
+> - 是否允许我开始按照这个方案修改代码？
+> - 端口方面，控制服务和现有前端 API 都在 `:8000` 端口下，我们将把前端网页也托管在 `http://localhost:8000` 下向用户提供访问，这样设计是否符合你的预期？

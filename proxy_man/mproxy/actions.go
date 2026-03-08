@@ -40,11 +40,11 @@ func AddTrafficMonitor(proxy *CoreHttpServer) {
 				onClose:    nil,
 			}
 
-			// 第二层：MinIO 捕获（仅 MITM 开启时执行）
-			if ctx.core_proxy.MitmEnabled {
+			// 第二层：MinIO 捕获（仅 MITM 开启且当前请求有 exchangeCapture 时执行）
+			if ctx.exchangeCapture != nil && ctx.core_proxy.Config.GetConfig().MitmEnabled {
 				contentType := req.Header.Get("Content-Type")
 				captReader := myminio.BuildBodyReader(trafficReader, ctx.Session, "req", contentType, req.ContentLength)
-				ctx.exchangeCapture.reqBodyCapture = captReader.Capture // MitmEnabled=true 时 exchangeCapture 必然非 nil
+				ctx.exchangeCapture.reqBodyCapture = captReader.Capture
 				req.Body = captReader
 			} else {
 				req.Body = trafficReader
@@ -115,11 +115,11 @@ func AddTrafficMonitor(proxy *CoreHttpServer) {
 			},
 		}
 
-		// 第二层：MinIO 捕获（仅 MITM 开启时执行）
-		if ctx.core_proxy.MitmEnabled {
+		// 第二层：MinIO 捕获（仅 MITM 开启且当前请求有 exchangeCapture 时执行）
+		if ctx.exchangeCapture != nil && ctx.core_proxy.Config.GetConfig().MitmEnabled {
 			contentType := resp.Header.Get("Content-Type")
 			captReader := myminio.BuildBodyReader(trafficReader, ctx.Session, "resp", contentType, resp.ContentLength)
-			ctx.exchangeCapture.respBodyCapture = captReader.Capture // MitmEnabled=true 时 exchangeCapture 必然非 nil
+			ctx.exchangeCapture.respBodyCapture = captReader.Capture
 			resp.Body = captReader
 		} else {
 			resp.Body = trafficReader
@@ -154,32 +154,6 @@ func PrintRespHeader(proxy *CoreHttpServer) {
 	})
 }
 
-func tunnelMonitor(proxy *CoreHttpServer) {
-	proxy.HookOnReq().DoFunc(func(req *http.Request, ctx *Pcontext) (*http.Request, *http.Response) {
-		// 使用闭包(捕获了外部变量的匿名函数)捕获 Counter_Ctxt，访问其流量数据
-		// 因为tunnel模式无法设置resp
-		ctx.tunnelTrafficClient.onClose = func() {
-			ctx.Log_P("[流量统计] 上行: %d | 下行: %d | 总计: %d ",
-				ctx.tunnelTrafficClient.nread,
-				ctx.tunnelTrafficClient.nwrite,
-				ctx.tunnelTrafficClient.nread+ctx.tunnelTrafficClient.nwrite,
-			)
-			// 在连接关闭时注销
-			proxy.MarkConnectionClosed(ctx.Session)
-		}
-		ctx.tunnelTrafficClientNoClosable.onClose = func() {
-			ctx.Log_P("[流量统计] 上行: %d | 下行: %d | 总计: %d ",
-				ctx.tunnelTrafficClientNoClosable.nread,
-				ctx.tunnelTrafficClientNoClosable.nwrite,
-				ctx.tunnelTrafficClientNoClosable.nread+ctx.tunnelTrafficClientNoClosable.nwrite,
-			)
-			// 在连接关闭时注销
-			proxy.MarkConnectionClosed(ctx.Session)
-		}
-		return req, nil
-	})
-}
-
 var httpDomains = map[string]bool{
 	"example.com": true,
 }
@@ -204,6 +178,35 @@ func StatusChange(proxy *CoreHttpServer) {
 		// 3. 默认情况
 		return OkConnect, host
 	})
+}
+
+// AddRouter 配置路由引擎（配置驱动），返回 Router 实例供 API 热更新
+func AddRouter(proxy *CoreHttpServer, cm *ConfigManager) *Router {
+	router := NewRouter(proxy)
+
+	// 从配置加载初始路由
+	cfg := cm.GetConfig()
+	if cfg.RouteEnable {
+		router.ReloadFromConfig(&cfg)
+	}
+
+	// 隧道透传模式路由
+	// 我们必须在这里绑定好动态路由器，在connectDial中决定是否使用
+	proxy.ConnectWithReqDial = router.RouteDial
+
+	// MITM 模式路由（通过自定义 RoundTripper）
+	routerRT := NewRouterRoundTripper(proxy, router)
+	proxy.HookOnReq().DoFunc(func(req *http.Request, ctx *Pcontext) (*http.Request, *http.Response) {
+		if !ctx.core_proxy.Config.GetConfig().RouteEnable {
+			return req, nil
+		}
+		if ctx.RoundTripper == nil {
+			ctx.RoundTripper = routerRT
+		}
+		return req, nil
+	})
+
+	return router
 }
 
 func HttpsMitmMode(proxy *CoreHttpServer) {

@@ -56,6 +56,8 @@
           <div
             v-for="virtualRow in virtualRows"
             :key="virtualRow.key"
+            :ref="(el) => { if (el) virtualizer.measureElement(el) }"
+            :data-index="virtualRow.index"
             :style="{
               position: 'absolute',
               top: 0,
@@ -118,7 +120,7 @@ const virtualizer = useVirtualizer(
   computed(() => ({
     count: connections.value.length,
     getScrollElement: () => scrollerRef.value,
-    estimateSize: () => 42,
+    estimateSize: () => 60,
     overscan: 10,
     getItemKey: (index) => connections.value[index].id,
   }))
@@ -345,8 +347,8 @@ h2 {
 /* CSS Grid 行布局 */
 .conn-grid-row {
   display: grid;
-  grid-template-columns: 80px 80px 180px 1fr 100px 100px 100px;
-  align-items: center;
+  grid-template-columns: minmax(40px, 0.5fr) minmax(60px, 0.8fr) minmax(100px, 1.5fr) minmax(120px, 3fr) minmax(60px, 0.8fr) minmax(60px, 0.8fr) minmax(60px, 0.8fr);
+  align-items: flex-start;
   color: #cba376;
 }
 
@@ -385,14 +387,14 @@ h2 {
 .td {
   padding: 10px 12px;
   overflow: hidden;
-  white-space: nowrap;
-  text-overflow: ellipsis;
+  white-space: normal;
+  word-break: break-all;
 }
 
 .url-cell {
   overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
+  white-space: normal;
+  word-break: break-all;
 }
 
 .no-data {

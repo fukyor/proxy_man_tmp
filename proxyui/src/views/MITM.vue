@@ -75,7 +75,7 @@
           暂无记录
         </div>
 
-        <div :style="{ position: 'relative', height: totalSize + 'px', minWidth: '1400px' }">
+        <div :style="{ position: 'relative', height: totalSize + 'px' }">
             <div
               v-for="virtualRow in virtualRows"
               :key="virtualRow.key"
@@ -301,7 +301,7 @@ const virtualizer = useVirtualizer(
   computed(() => ({
     count: filteredExchanges.value.length,
     getScrollElement: () => scrollerRef.value,
-    estimateSize: () => 42,
+    estimateSize: () => 60,
     overscan: 10,
     getItemKey: (index) => filteredExchanges.value[index].id,
   }))
@@ -348,8 +348,7 @@ function formatTime(time) {
   const hours = String(date.getHours()).padStart(2, '0')
   const minutes = String(date.getMinutes()).padStart(2, '0')
   const seconds = String(date.getSeconds()).padStart(2, '0')
-  const ms = String(date.getMilliseconds()).padStart(3, '0')
-  return `${hours}:${minutes}:${seconds}.${ms}`
+  return `${hours}:${minutes}:${seconds}`
 }
 
 function formatDuration(duration) {
@@ -541,8 +540,8 @@ h1 {
 /* CSS Grid 行布局 */
 .mitm-grid-row {
   display: grid;
-  grid-template-columns: 80px 80px 80px 120px 80px 180px 1fr 80px 80px 80px 80px;
-  align-items: center;
+  grid-template-columns: minmax(50px, 0.6fr) minmax(60px, 0.6fr) minmax(50px, 0.5fr) minmax(80px, 1fr) minmax(60px, 0.8fr) minmax(120px, 1.5fr) minmax(150px, 3fr) minmax(60px, 0.8fr) minmax(60px, 0.8fr) minmax(60px, 0.8fr) minmax(60px, 0.8fr);
+  align-items: flex-start;
   color: #cba376;
 }
 
@@ -553,7 +552,7 @@ h1 {
   position: sticky;
   top: 0;
   z-index: 10;
-  min-width: 1400px;
+  width: 100%;
 }
 
 .th {
@@ -582,8 +581,8 @@ h1 {
   padding: 10px 12px;
   border-bottom: 1px solid #3a3a3a;
   overflow: hidden;
-  white-space: nowrap;
-  text-overflow: ellipsis;
+  white-space: normal;
+  word-break: break-all;
 }
 
 /* 空数据 */
@@ -604,7 +603,8 @@ h1 {
 
 /* URL 列截断 */
 .url-cell {
-  max-width: 300px;
+  max-width: none;
+  word-break: break-all;
 }
 
 /* 虚拟滚动容器（统一处理水平+垂直滚动） */
@@ -915,5 +915,16 @@ h1 {
 
 .mitm-scroller::-webkit-scrollbar-thumb:hover {
   background: #555;
+}
+
+@media screen and (max-width: 1200px) {
+  .mitm-grid-row {
+    grid-template-columns: minmax(40px, 0.5fr) minmax(80px, 1fr) minmax(50px, 0.8fr) minmax(100px, 1.5fr) minmax(120px, 3fr) minmax(50px, 0.8fr) minmax(50px, 0.8fr) minmax(50px, 0.8fr);
+  }
+  .mitm-grid-row > div:nth-child(2),
+  .mitm-grid-row > div:nth-child(3),
+  .mitm-grid-row > div:nth-child(9) {
+    display: none;
+  }
 }
 </style>
